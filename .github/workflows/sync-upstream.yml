@@ -1,0 +1,80 @@
+name: Sync upstream (PR only, never auto-merge)
+
+# Keeps this fork aware of the upstream repo WITHOUT ever touching your own
+# `main`. When upstream has new commits, the job refreshes a throwaway
+# `upstream-sync` branch and opens (or updates) a Pull Request into `main`.
+# You review and merge it yourself — exactly like 泽更新: detect, report, wait
+# for your go-ahead. Your 改版 on `main` is never force-pushed or overwritten.
+#
+# Change the upstream repo once here (or set a repo variable UPSTREAM_REPO).
+
+on:
+  schedule:
+    - cron: '0 20 * * *'   # daily at 04:00 Asia/Shanghai (20:00 UTC)
+  workflow_dispatch: {}      # run on demand from the Actions tab
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'saya-ch/dsh-mobile' }}
+  UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH || 'main' }}
+  SYNC_BRANCH: upstream-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Decide whether upstream is ahead
+        id: gate
+        run: |
+          behind=$(git rev-list --count "origin/main..upstream/${UPSTREAM_BRANCH}")
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          if [ "$behind" -eq 0 ]; then
+            echo "✅ Already up to date with ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}; nothing to do."
+          else
+            echo "⬆️  Upstream is $behind commit(s) ahead — will open/update a PR."
+          fi
+
+      - name: Refresh the sync branch at the upstream tip
+        if: steps.gate.outputs.behind != '0'
+        run: |
+          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${SYNC_BRANCH}" --force
+
+      - name: Open or update the Pull Request
+        if: steps.gate.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          behind="${{ steps.gate.outputs.behind }}"
+          title="⬆️ Sync ${behind} upstream commit(s) from ${UPSTREAM_REPO}"
+          body=$(cat <<EOF
+          Automated upstream sync. **This PR is not auto-merged** — review and merge when you're ready.
+
+          - Upstream: \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`, **${behind}** commit(s) ahead of your \`main\`.
+          - Your \`main\` (and your 改版) is untouched until you merge.
+          - If GitHub shows conflicts, resolve them in the PR; your changes win where you keep them.
+          EOF
+          )
+          existing=$(gh pr list --head "${SYNC_BRANCH}" --base main --state open --json number --jq '.[0].number' || true)
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body "$body"
+            echo "Updated existing PR #$existing."
+          else
+            gh pr create --base main --head "${SYNC_BRANCH}" --title "$title" --body "$body"
+          fi
