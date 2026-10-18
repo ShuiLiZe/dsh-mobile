@@ -545,7 +545,7 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .dshm-details[data-open=true]{transform:translateX(0)}
 .dshm-details[data-open=false]{pointer-events:none;visibility:hidden;transition:transform 190ms cubic-bezier(.22,1,.36,1),visibility 0s linear 190ms}
 @media(max-width:899px){.dshm-details{width:100%;max-width:100%;box-shadow:none}.dshm-details [data-sidebar-right-toggle],.dshm-details [data-sidebar-right-mode]{min-width:48px;min-height:48px}}
-.dshm-scrim{position:fixed;z-index:65;inset:0;border:0;background:var(--dsw-alias-bg-mask-1,rgb(0 0 0 / 24%));-webkit-backdrop-filter:var(--dsw-mask-blur,none);backdrop-filter:var(--dsw-mask-blur,none);opacity:0;pointer-events:none;transition:opacity 180ms ease-out}
+.dshm-scrim{position:fixed;z-index:65;inset:0;border:0;background:var(--dsw-alias-bg-mask-1,rgb(0 0 0 / 24%));opacity:0;pointer-events:none;transition:opacity 180ms ease-out}
 .dshm-scrim[data-open=true]{opacity:1;pointer-events:auto}
 .dshm-overlay{position:fixed;z-index:90;inset:0;pointer-events:none}.dshm-overlay>*{pointer-events:auto}
 /* Reserve navigation space instead of covering a panel's own save controls. */
