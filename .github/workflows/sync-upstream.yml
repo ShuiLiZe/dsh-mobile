@@ -1,12 +1,18 @@
-name: Sync upstream (PR only, never auto-merge)
+name: Sync upstream (auto-merge, keeps our changes)
 
-# Keeps this fork aware of the upstream repo WITHOUT ever touching your own
-# `main`. When upstream has new commits, the job refreshes a throwaway
-# `upstream-sync` branch and opens (or updates) a Pull Request into `main`.
-# You review and merge it yourself — exactly like 泽更新: detect, report, wait
-# for your go-ahead. Your 改版 on `main` is never force-pushed or overwritten.
+# Daily upstream sync for this fork.
 #
-# Change the upstream repo once here (or set a repo variable UPSTREAM_REPO).
+# - Upstream commits are MERGED into our `main` (a normal 3-way merge commit).
+#   Our own changes are never rebased away, reverted or force-pushed: a merge
+#   keeps both histories, and git only takes upstream's version of lines we
+#   never touched.
+# - Clean merge + typecheck/tests pass  -> pushed straight to `main`.
+# - Merge conflict (upstream edited the same lines we changed) or failing
+#   checks -> nothing is pushed to `main`; a PR is opened instead and the
+#   conflicting files are listed, so a human decides. Conflicts are never
+#   auto-resolved in either side's favour.
+#
+# Change the upstream repo here, or set repo variables UPSTREAM_REPO / UPSTREAM_BRANCH.
 
 on:
   schedule:
@@ -15,7 +21,7 @@ on:
 
 concurrency:
   group: sync-upstream
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -24,6 +30,7 @@ permissions:
 env:
   UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'saya-ch/dsh-mobile' }}
   UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH || 'main' }}
+  TARGET_BRANCH: main
   SYNC_BRANCH: upstream-sync
 
 jobs:
@@ -33,48 +40,89 @@ jobs:
       - name: Checkout fork (full history)
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       - name: Fetch upstream
         run: |
+          git config user.name  "dsh-upstream-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch upstream "${UPSTREAM_BRANCH}"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
 
-      - name: Decide whether upstream is ahead
+      - name: Is upstream ahead?
         id: gate
         run: |
-          behind=$(git rev-list --count "origin/main..upstream/${UPSTREAM_BRANCH}")
+          behind=$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")
           echo "behind=$behind" >> "$GITHUB_OUTPUT"
-          if [ "$behind" -eq 0 ]; then
-            echo "✅ Already up to date with ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}; nothing to do."
-          else
-            echo "⬆️  Upstream is $behind commit(s) ahead — will open/update a PR."
-          fi
+          echo "Upstream is $behind commit(s) ahead of ${TARGET_BRANCH}."
 
-      - name: Refresh the sync branch at the upstream tip
+      - name: Try merging upstream
+        id: merge
         if: steps.gate.outputs.behind != '0'
         run: |
-          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${SYNC_BRANCH}" --force
+          if git merge --no-ff --no-edit -m "chore: merge upstream ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}" "upstream/${UPSTREAM_BRANCH}"; then
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+            echo "Conflicting files:"; cat "$RUNNER_TEMP/conflicts.txt"
+          fi
 
-      - name: Open or update the Pull Request
-        if: steps.gate.outputs.behind != '0'
+      - uses: actions/setup-node@v4
+        if: steps.merge.outputs.result == 'clean'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify merged tree (typecheck + tests)
+        id: verify
+        if: steps.merge.outputs.result == 'clean'
+        continue-on-error: true
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+
+      - name: Push merge to main
+        id: push
+        continue-on-error: true   # e.g. upstream touched .github/workflows (token can't push those)
+        if: steps.merge.outputs.result == 'clean' && steps.verify.outcome == 'success'
+        run: |
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "✅ Merged ${{ steps.gate.outputs.behind }} upstream commit(s) into ${TARGET_BRANCH}."
+          # Close a stale manual-review PR if one is left open.
+          gh pr list --head "${SYNC_BRANCH}" --base "${TARGET_BRANCH}" --state open --json number --jq '.[].number' | while read -r n; do
+            gh pr close "$n" --comment "Upstream merged automatically into ${TARGET_BRANCH}; closing." || true
+          done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          behind="${{ steps.gate.outputs.behind }}"
-          title="⬆️ Sync ${behind} upstream commit(s) from ${UPSTREAM_REPO}"
-          body=$(cat <<EOF
-          Automated upstream sync. **This PR is not auto-merged** — review and merge when you're ready.
 
-          - Upstream: \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`, **${behind}** commit(s) ahead of your \`main\`.
-          - Your \`main\` (and your 改版) is untouched until you merge.
-          - If GitHub shows conflicts, resolve them in the PR; your changes win where you keep them.
-          EOF
-          )
-          existing=$(gh pr list --head "${SYNC_BRANCH}" --base main --state open --json number --jq '.[0].number' || true)
+      - name: Needs a human -> open/update PR
+        if: steps.merge.outputs.result == 'conflict' || (steps.merge.outputs.result == 'clean' && (steps.verify.outcome != 'success' || steps.push.outcome == 'failure'))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REASON: ${{ steps.merge.outputs.result }}
+        run: |
+          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${SYNC_BRANCH}" --force
+          behind="${{ steps.gate.outputs.behind }}"
+          if [ "$REASON" = "conflict" ]; then
+            why="上游修改了我们也改过的同一处代码，无法自动合并。冲突文件："
+            files=$(sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt")
+          else
+            why="可以干净合并，但合并后检查未通过或无权限推送（例如上游改了工作流文件），未推送到 main。详见本次 Actions 日志。"
+            files=""
+          fi
+          title="⚠️ 上游更新需要手动处理（${behind} 个提交）"
+          body=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "上游 \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\` 有 **${behind}** 个新提交。" \
+            "$why" "$files" \
+            "\`main\` 和我们的改动保持不变。解决冲突时请保留我们的修改，再合并本 PR。")
+          existing=$(gh pr list --head "${SYNC_BRANCH}" --base "${TARGET_BRANCH}" --state open --json number --jq '.[0].number' || true)
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --title "$title" --body "$body"
-            echo "Updated existing PR #$existing."
           else
-            gh pr create --base main --head "${SYNC_BRANCH}" --title "$title" --body "$body"
+            gh pr create --base "${TARGET_BRANCH}" --head "${SYNC_BRANCH}" --title "$title" --body "$body"
           fi
+          exit 0
