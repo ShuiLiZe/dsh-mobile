@@ -593,6 +593,22 @@ body:has(.dshm-shell) :is(input,textarea,[contenteditable=true],[contenteditable
 .dshm-drawer[data-open=false]{width:56px}
 }
 @media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim,.dshm-drawer>*,.dshm-main{transition:none!important}}
+/* DS Bot compat: releases before its own mobile layer portal menus and dialogs into
+   body at z-index 40-70, under the mobile drawer and overlay host, so the account menu
+   ("Switch to classic Agent mode") opened out of reach. Lift them above the shell and
+   stack its settings dialog on phones; newer DS Bot ships the same rules. */
+body:has(.dshm-shell) :is(.bt-menu,.bt-react-strip,.bt-update-pop,.bt-connect-tip){z-index:340!important}
+body:has(.dshm-shell) :is(.bt-settings-layer,.bt-mem-layer,.bt-palette-layer){z-index:335!important}
+body:has(.dshm-shell) .bt-toast{z-index:1000!important}
+body:has(.dshm-shell) :is(.bt-menu,.bt-account-menu,.bt-plus-menu){max-width:calc(100vw - 24px)!important;box-sizing:border-box}
+@media(max-width:640px){
+body:has(.dshm-shell) .bt-settings-layer{inset:0!important}
+body:has(.dshm-shell) .bt-settings{width:100vw!important;max-width:100vw!important;height:100%!important;border-radius:0!important;border:0!important;flex-direction:column!important;padding-top:env(safe-area-inset-top);box-sizing:border-box}
+body:has(.dshm-shell) .bt-settings-nav{width:100%!important;flex:none!important;flex-direction:row!important;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0!important;gap:4px;padding:8px 56px 8px 8px!important}
+body:has(.dshm-shell) .bt-settings-nav .bt-settings-item{flex:none;white-space:nowrap}
+body:has(.dshm-shell) .bt-settings-main{flex:1 1 auto!important;width:100%!important;height:auto!important;min-height:0!important;box-sizing:border-box}
+body:has(.dshm-shell) .bt-settings-close{top:calc(env(safe-area-inset-top) + 8px)!important;right:8px!important;z-index:2}
+}
 `
 
 function MobileAppFrame(props: MobileRootProps & {

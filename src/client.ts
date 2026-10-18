@@ -85,6 +85,13 @@ function visibleBackLayer(view: Window, element: HTMLElement): boolean {
   return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
 }
 
+/** DS Bot (ds-bot plugin) layers that close on Escape, newest last in DOM order. */
+const DS_BOT_BACK_LAYERS = [
+  '.bt-menu', '.bt-react-strip', '.bt-update-pop', '.bt-us-pick', '.bt-avedit',
+  '.bt-settings-layer', '.bt-mem-layer', '.bt-palette-layer', '.bt-newchat', '.bt-dialog', '.bt-create',
+  '.bt-voice-stage', '.bt-panel',
+].join(',')
+
 /**
  * Consume page-level surfaces and dismissible DSH overlays before layout navigation.
  * Composer model popups use DSH's Escape handling to return from a pane before closing.
@@ -98,6 +105,17 @@ export function installMobileNativeBack(view: Window, page: Document, blocked: (
     if (!event.cancelable || event.defaultPrevented) return
     const claim = (): void => { event.preventDefault(); event.stopImmediatePropagation() }
     if (closeClientModuleDialog()) { claim(); return }
+    // DS Bot releases without their own mobile Back layer: its menus and dialogs close on
+    // Escape, the same key as on desktop. Newer DS Bot answers Back before this listener.
+    const botLayer = [...page.querySelectorAll<HTMLElement>(DS_BOT_BACK_LAYERS)]
+      .filter(element => element.closest('[data-leaving]') === null && visibleBackLayer(view, element)).at(-1)
+    if (botLayer !== undefined) {
+      claim()
+      const focused = page.activeElement
+      const target = focused !== null && botLayer.contains(focused) ? focused : page.body
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }))
+      return
+    }
     const surfaces = [...page.querySelectorAll<HTMLElement>('[data-dsh-mobile-surface-placement="page"], [data-dsh-mobile-surface-placement="overlay"]')]
     const surface = surfaces.filter(element => visibleBackLayer(view, element)).at(-1)
     if (surface !== undefined) {

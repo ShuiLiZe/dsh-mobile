@@ -1,3 +1,4 @@
+import { MOBILE_LAYOUT_STYLES } from '../src/mobile-layout.js'
 import { readFileSync, readdirSync } from 'node:fs'
 import postcss from 'postcss'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -116,6 +117,10 @@ class BackDocument extends EventTarget {
     if (selector.includes('dsh-mobile-surface-placement')) {
       return all.filter(node => node.dataset.dshMobileSurfacePlacement === 'page' || node.dataset.dshMobileSurfacePlacement === 'overlay')
     }
+    if (selector.includes('.bt-menu')) {
+      const classes = selector.split(',').map(part => part.trim().slice(1))
+      return all.filter(node => (node.getAttribute('class') ?? '').split(' ').some(name => classes.includes(name)))
+    }
     if (selector.includes('dsh-mobile-composer-model-trigger')) {
       return all.filter(node => node.getAttribute('data-dsh-mobile-composer-model-trigger') !== null
         && node.getAttribute('aria-expanded') === 'true')
@@ -204,6 +209,37 @@ describe('mobile native Back before layout navigation', () => {
     expect(layoutBack).toHaveBeenCalledOnce()
     expect(blocked).not.toHaveBeenCalled()
     stop()
+  })
+
+  it('closes an open DS Bot menu with Escape before layout navigation', () => {
+    vi.stubGlobal('KeyboardEvent', BackKeyboardEvent)
+    const view = new BackWindow()
+    const page = new BackDocument()
+    const menu = new BackNode(); menu.setAttribute('class', 'bt-menu bt-menu-up bt-account-menu'); menu.setAttribute('role', 'menu')
+    const item = new BackNode('BUTTON'); menu.append(item)
+    page.body.append(menu)
+    page.activeElement = item
+    const keys: string[] = []
+    item.addEventListener('keydown', event => { keys.push((event as KeyboardEvent).key) })
+    const blocked = vi.fn()
+    const stop = installMobileNativeBack(view as never, page as never, blocked)
+
+    const back = backEvent()
+    view.dispatchEvent(back)
+    expect(back.defaultPrevented).toBe(true)
+    expect(keys).toEqual(['Escape'])
+    expect(blocked).not.toHaveBeenCalled()
+
+    menu.visibility = 'hidden'
+    const after = backEvent()
+    view.dispatchEvent(after)
+    expect(after.defaultPrevented).toBe(false)
+    stop()
+  })
+
+  it('lifts DS Bot menus and dialogs above the mobile shell', () => {
+    expect(MOBILE_LAYOUT_STYLES).toContain('body:has(.dshm-shell) :is(.bt-menu,.bt-react-strip,.bt-update-pop,.bt-connect-tip){z-index:340!important}')
+    expect(MOBILE_LAYOUT_STYLES).toContain('body:has(.dshm-shell) :is(.bt-settings-layer,.bt-mem-layer,.bt-palette-layer){z-index:335!important}')
   })
 
   it('ignores hidden surfaces, requires a cancelable request, and removes the capture listener', () => {
