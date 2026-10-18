@@ -1,0 +1,105 @@
+name: Sync upstream
+
+# Keeps this fork current with saya-ch/dsh-mobile:
+#   1. main follows upstream main (merge-upstream API).
+#   2. upstream main is merged into each branch in SYNC_BRANCHES; the merge is
+#      pushed only when it is conflict-free and typecheck + tests pass.
+# Anything that needs a human (a conflict, failing tests, an upstream change to
+# .github/workflows that GITHUB_TOKEN may not push) opens or updates one issue,
+# which closes itself once a later run syncs cleanly.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: saya-ch/dsh-mobile
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCHES: feat/dsh-native-theme
+  ISSUE_TITLE: Upstream sync needs attention
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Sync main with upstream
+        id: main
+        run: |
+          set +e
+          out=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/merge-upstream" -f branch=main 2>&1)
+          code=$?
+          echo "$out"
+          if [ $code -ne 0 ]; then
+            { echo 'problem<<PROBLEM_EOF'; echo "- \`main\` 无法自动同步上游：$out"; echo 'PROBLEM_EOF'; } >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+
+      - name: Merge upstream into sync branches
+        id: branches
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          problems=''
+          for branch in ${SYNC_BRANCHES}; do
+            git fetch --no-tags origin "$branch"
+            git checkout -q -B "$branch" "origin/$branch"
+            if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" HEAD; then
+              echo "$branch already contains upstream"
+              continue
+            fi
+            if ! git merge --no-edit -m "chore: merge upstream ${UPSTREAM}@${UPSTREAM_BRANCH} into $branch" "upstream/${UPSTREAM_BRANCH}"; then
+              files=$(git diff --name-only --diff-filter=U | sed 's/^/  - /')
+              git merge --abort
+              problems="$problems"$'\n'"- \`$branch\` 与上游合并有冲突，需要手动处理："$'\n'"$files"
+              continue
+            fi
+            if ! (npm ci --no-audit --no-fund && npm run typecheck && npx vitest run); then
+              problems="$problems"$'\n'"- \`$branch\` 合并上游后 typecheck/测试失败，未推送，详见运行日志。"
+              git reset -q --hard "origin/$branch"
+              continue
+            fi
+            if ! git push origin "HEAD:$branch"; then
+              problems="$problems"$'\n'"- \`$branch\` 合并成功但推送被拒（上游可能改了 .github/workflows，GITHUB_TOKEN 无权推送），需要手动合并。"
+            fi
+          done
+          { echo 'problem<<PROBLEM_EOF'; echo "$problems"; echo 'PROBLEM_EOF'; } >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        if: always()
+        env:
+          MAIN_PROBLEM: ${{ steps.main.outputs.problem }}
+          BRANCH_PROBLEM: ${{ steps.branches.outputs.problem }}
+        run: |
+          body=$(printf '%s\n%s\n' "$MAIN_PROBLEM" "$BRANCH_PROBLEM" | sed '/^[[:space:]]*$/d')
+          number=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number -q '.[0].number')
+          if [ -z "$body" ]; then
+            if [ -n "$number" ]; then gh issue close "$number" -R "$GITHUB_REPOSITORY" -c '上游同步已恢复正常。'; fi
+            exit 0
+          fi
+          text=$(printf '%s\n\n运行记录：%s/%s/actions/runs/%s\n' "$body" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" -R "$GITHUB_REPOSITORY" -b "$text"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" -t "$ISSUE_TITLE" -b "$text"
+          fi
