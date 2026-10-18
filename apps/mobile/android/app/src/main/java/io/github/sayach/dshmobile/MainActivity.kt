@@ -6,7 +6,6 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.ClipData
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -876,6 +875,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         row.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_chevron_right)
+            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_secondary))
             contentDescription = null
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(dp(32), dp(48)))
@@ -1144,14 +1144,9 @@ class MainActivity : Activity() {
         deviceUndoPopup = null
     }
 
+    /** Launch behavior is the only App setting; the launcher icon is the fixed DSH mark. */
     private fun showDeviceListSettings() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.device_list_settings)
-            .setItems(arrayOf(getString(R.string.launch_settings), getString(R.string.icon_settings))) { _, which ->
-                if (which == 0) showLaunchSettings() else showIconSettings()
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        showLaunchSettings()
     }
 
     private fun showLaunchSettings() {
@@ -1168,63 +1163,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** Flip the launcher icon between the DSH whale mascot and the official whale marks. */
-    private fun iconComponent(icon: LauncherIconPolicy.Icon): ComponentName = ComponentName(
-        packageName,
-        LauncherIconPolicy.aliasClassName(MainActivity::class.java.name.substringBeforeLast('.'), icon),
-    )
-
-    private fun currentAppIcon(): String = LauncherIconPolicy.selectedKey(
-        preferences.getString(PREFERENCE_APP_ICON, null),
-    ) { packageManager.getComponentEnabledSetting(iconComponent(it)) }
-
-    private fun applyAppIcon(icon: String) {
-        val pm = packageManager
-        try {
-            LauncherIconPolicy.switchIcon(
-                key = icon,
-                atomic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-                readState = { pm.getComponentEnabledSetting(iconComponent(it)) },
-            ) { changes ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    pm.setComponentEnabledSettings(changes.map {
-                        PackageManager.ComponentEnabledSetting(iconComponent(it.icon), it.state, PackageManager.DONT_KILL_APP)
-                    })
-                } else {
-                    changes.forEach {
-                        pm.setComponentEnabledSetting(iconComponent(it.icon), it.state, PackageManager.DONT_KILL_APP)
-                    }
-                }
-            }
-            preferences.edit().putString(PREFERENCE_APP_ICON, icon).apply()
-            deviceListStatus?.setText(R.string.icon_settings_saved)
-        } catch (error: Exception) {
-            // Package-manager failure is reported without persisting an unconfirmed selection.
-            Toast.makeText(this, R.string.icon_settings_failed, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun showIconSettings() {
-        val keys = LauncherIconPolicy.icons.map { it.key }
-        val labels = arrayOf(
-            getString(R.string.icon_choice_whale_girl),
-            getString(R.string.icon_choice_official_whale),
-            getString(R.string.icon_choice_official_whale_dark),
-            getString(R.string.icon_choice_official_whale_teal),
-            getString(R.string.icon_choice_official_whale_mono),
-            getString(R.string.icon_choice_official_whale_black),
-            getString(R.string.icon_choice_official_whale_white),
-        )
-        val selected = keys.indexOf(currentAppIcon()).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle(R.string.icon_settings)
-            .setSingleChoiceItems(labels, selected) { dialog, which ->
-                dialog.dismiss()
-                applyAppIcon(keys[which])
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
     private fun connectPairedDevice(snapshot: PairedDeviceRecord) {
         if (!prepareCredentialStorage()) return
         val device = pairedDeviceStore.load().firstOrNull { it.key == snapshot.key } ?: return
@@ -3373,7 +3311,6 @@ class MainActivity : Activity() {
         const val PREFERENCE_NEARBY_PERMISSION_LIMITED = "nearby_permission_limited"
         const val PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
         const val PREFERENCE_WEB_CHROME_COLOR = "web_chrome_color"
-        const val PREFERENCE_APP_ICON = "app_icon"
         const val STATE_SHOWING_SETUP = "showing_setup"
         const val STATE_ACCESS_MODE = "access_mode"
         const val STATE_NATIVE_BRIDGE = "native_bridge"

@@ -49,7 +49,7 @@ Use short 150–240ms state/navigation transitions. Respect `prefers-reduced-mot
 
 ## Brand artwork
 
-- Default app artwork: `assets/brand/app-icon-master.png` shows the whale-themed character holding a phone. Keep this as the default identity and README icon; do not add text or watermarks. The app also offers six existing DeepSeek whale-mark color variants through native Launcher aliases. Selecting one changes only the launcher artwork, not the package, signer or paired data; it does not make this community app an official DeepSeek client.
+- Default app artwork: `assets/brand/app-icon-master.png` shows the whale-themed character holding a phone. Keep this as the default identity and README icon; do not add text or watermarks. The Android launcher uses the monochrome DSH official mark (FishLogo from `@deepseek-ai/dsh-client-ui-primitives`) as an adaptive icon through one `.LauncherDsh` alias; native pages follow the connected DSH theme. This does not make this community app an official DeepSeek client.
 - Repository hero: use `assets/brand/repository-hero.png`; the existing image includes the DSH Mobile title at left and a character with a desktop scene at right. Keep README copy outside the image rather than duplicating its built-in title.
 
 ## Delivery checklist

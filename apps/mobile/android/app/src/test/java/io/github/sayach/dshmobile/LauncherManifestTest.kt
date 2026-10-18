@@ -21,32 +21,31 @@ class LauncherManifestTest {
         assertEquals(0, main.getElementsByTagName("intent-filter").length)
         val aliases = doc.getElementsByTagName("activity-alias")
         val entries = (0 until aliases.length).map { aliases.item(it) as Element }
-        assertEquals(LauncherIconPolicy.icons.map { ".${it.alias}" }.toSet(),
-            entries.map { it.getAttributeNS(ANDROID_NAMESPACE, "name") }.toSet())
-        assertEquals(1, entries.count { it.getAttributeNS(ANDROID_NAMESPACE, "enabled") == "true" })
-        for (alias in entries) {
-            assertEquals(".MainActivity", alias.getAttributeNS(ANDROID_NAMESPACE, "targetActivity"))
-            assertEquals("true", alias.getAttributeNS(ANDROID_NAMESPACE, "exported"))
-            val intents = alias.getElementsByTagName("intent-filter")
-            assertEquals(1, intents.length)
-            val filter = intents.item(0) as Element
-            assertEquals("android.intent.action.MAIN",
-                (filter.getElementsByTagName("action").item(0) as Element).getAttributeNS(ANDROID_NAMESPACE, "name"))
-            assertEquals("android.intent.category.LAUNCHER",
-                (filter.getElementsByTagName("category").item(0) as Element).getAttributeNS(ANDROID_NAMESPACE, "name"))
-        }
+        // A single DSH launcher alias under a fresh name: states persisted for the former
+        // whale aliases must not be able to hide the only launcher entry after an upgrade.
+        assertEquals(listOf(".LauncherDsh"), entries.map { it.getAttributeNS(ANDROID_NAMESPACE, "name") })
+        val alias = entries.single()
+        assertEquals("true", alias.getAttributeNS(ANDROID_NAMESPACE, "enabled"))
+        assertEquals("@mipmap/ic_launcher", alias.getAttributeNS(ANDROID_NAMESPACE, "icon"))
+        assertEquals(".MainActivity", alias.getAttributeNS(ANDROID_NAMESPACE, "targetActivity"))
+        assertEquals("true", alias.getAttributeNS(ANDROID_NAMESPACE, "exported"))
+        val intents = alias.getElementsByTagName("intent-filter")
+        assertEquals(1, intents.length)
+        val filter = intents.item(0) as Element
+        assertEquals("android.intent.action.MAIN",
+            (filter.getElementsByTagName("action").item(0) as Element).getAttributeNS(ANDROID_NAMESPACE, "name"))
+        assertEquals("android.intent.category.LAUNCHER",
+            (filter.getElementsByTagName("category").item(0) as Element).getAttributeNS(ANDROID_NAMESPACE, "name"))
     }
 
     @Test
-    fun settingsUseOneGearEntryAndPersistOnlyAfterTheComponentUpdate() {
+    fun launcherIconIsTheAdaptiveDshMarkWithAThemedLayer() {
+        val icon = sourceFile("res/mipmap-anydpi-v26/ic_launcher.xml").readText()
+        assertTrue(icon.contains("@drawable/ic_launcher_foreground"))
+        assertTrue(icon.contains("<monochrome android:drawable=\"@drawable/ic_launcher_monochrome\""))
         val source = sourceFile("java/io/github/sayach/dshmobile/MainActivity.kt").readText()
         assertTrue(source.contains("setOnClickListener { showDeviceListSettings() }"))
-        assertTrue(!source.contains("toolbarIconButton(R.drawable.ic_whale_toolbar"))
-        val apply = source.substringAfter("private fun applyAppIcon").substringBefore("private fun showIconSettings")
-        assertTrue(apply.indexOf("LauncherIconPolicy.switchIcon") < apply.indexOf("putString(PREFERENCE_APP_ICON"))
-        assertTrue(apply.contains("setComponentEnabledSettings"))
-        assertTrue(apply.contains("Build.VERSION_CODES.TIRAMISU"))
-        assertTrue(source.contains("MainActivity::class.java.name.substringBeforeLast('.')"))
+        assertTrue(!source.contains("setComponentEnabledSetting"))
     }
 
     private fun sourceFile(path: String): File {
