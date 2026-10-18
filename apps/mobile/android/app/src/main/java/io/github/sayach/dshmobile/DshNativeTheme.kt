@@ -67,7 +67,6 @@ internal object DshNativeTheme {
             "app_background" to background,
             "app_surface" to surface,
             "app_surface_translucent" to withAlpha(surface, 0xF2),
-            "app_setup_scrim" to withAlpha(background, if (dark) 0xB3 else 0x99),
             "app_surface_tinted" to tinted,
             "app_foreground" to foreground,
             "app_secondary" to secondary,

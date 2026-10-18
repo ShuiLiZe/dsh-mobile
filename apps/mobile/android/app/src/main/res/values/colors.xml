@@ -8,7 +8,6 @@
     <color name="app_background">#F5F6F7</color>          <!-- bg-module-platform -->
     <color name="app_surface">#FFFFFF</color>             <!-- bg-layer-2 -->
     <color name="app_surface_translucent">#F2FFFFFF</color>
-    <color name="app_setup_scrim">#99FFFFFF</color>
     <color name="app_surface_tinted">#F0F1F3</color>      <!-- interactive-bg-hover over bg-layer-2 -->
     <color name="app_foreground">#0F1115</color>          <!-- label-primary -->
     <color name="app_secondary">#61666B</color>           <!-- label-secondary -->

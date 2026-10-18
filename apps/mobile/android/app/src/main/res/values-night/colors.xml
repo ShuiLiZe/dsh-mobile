@@ -4,7 +4,6 @@
     <color name="app_background">#151517</color>          <!-- bg-base -->
     <color name="app_surface">#232324</color>             <!-- bg-layer-1 -->
     <color name="app_surface_translucent">#F2232324</color>
-    <color name="app_setup_scrim">#B3151517</color>
     <color name="app_surface_tinted">#2C2C2E</color>      <!-- bg-layer-2 -->
     <color name="app_foreground">#F9FAFB</color>          <!-- label-primary -->
     <color name="app_secondary">#CFD3D6</color>           <!-- label-secondary -->

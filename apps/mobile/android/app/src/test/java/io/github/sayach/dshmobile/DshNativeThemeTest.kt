@@ -49,7 +49,7 @@ class DshNativeThemeTest {
     @Test fun everyAppColorIsProvidedSoNoNativeViewMixesThemes() {
         val palette = DshNativeTheme.fromTokens(light, dark = false)!!
         val expected = setOf(
-            "app_background", "app_surface", "app_surface_translucent", "app_setup_scrim", "app_surface_tinted",
+            "app_background", "app_surface", "app_surface_translucent", "app_surface_tinted",
             "app_foreground", "app_secondary", "app_border", "app_accent", "app_on_accent", "app_error", "app_success",
         )
         assertEquals(expected, palette.colors.keys)

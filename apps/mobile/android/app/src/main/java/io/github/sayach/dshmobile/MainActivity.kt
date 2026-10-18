@@ -548,8 +548,6 @@ class MainActivity : Activity() {
             // Receive unconsumed Insets before the real page while still drawing above it.
             translationZ = dp(1).toFloat()
         }
-        addSetupArtwork(waiting)
-        for (index in 0 until waiting.childCount) waiting.getChildAt(index).importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
@@ -1457,7 +1455,6 @@ class MainActivity : Activity() {
         val root = FrameLayout(this).apply {
             setBackgroundColor(themeColor(R.color.app_background))
         }
-        addSetupArtwork(root)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -1535,7 +1532,6 @@ class MainActivity : Activity() {
         val root = FrameLayout(this).apply {
             setBackgroundColor(themeColor(R.color.app_background))
         }
-        addSetupArtwork(root)
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
@@ -1579,21 +1575,6 @@ class MainActivity : Activity() {
         setPageContent(root)
         applySafeAreaInsets(root)
         return card
-    }
-
-    /** Pre-connection artwork: covers the whole screen (edges may crop), under a theme-aware scrim. */
-    private fun addSetupArtwork(root: FrameLayout) {
-        root.addView(
-            ImageView(this).apply {
-                setImageResource(R.drawable.setup_background_image)
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-        root.addView(
-            View(this).apply { setBackgroundColor(themeColor(R.color.app_setup_scrim)) },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
     }
 
     /** Reconnect to a manually entered origin, falling back to pairing when unknown. */

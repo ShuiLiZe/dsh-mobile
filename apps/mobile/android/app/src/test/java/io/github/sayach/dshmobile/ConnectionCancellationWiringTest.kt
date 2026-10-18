@@ -10,7 +10,7 @@ class ConnectionCancellationWiringTest {
     @Test fun cancellationIsVisibleImmediatelyAndSystemBackUsesTheSameOwner() {
         val source = activitySource()
         val start = method(source, "startConnectionAttempt")
-        assertTrue(start.contains("addSetupArtwork(waiting)"))
+        assertFalse("Setup pages use the plain DSH background", source.contains("setup_background_image"))
         assertTrue(start.contains("ProgressBar(this@MainActivity)"))
         assertTrue(Regex("secondaryButton\\(\\s*if \\(preserveBrowser == null\\) R\\.string\\.connection_cancel else R\\.string\\.connection_stop_reconnecting,\\s*48,").containsMatchIn(start))
         assertTrue(start.contains("{ connectionAttempts.cancel(attempt) }"))
@@ -20,7 +20,7 @@ class ConnectionCancellationWiringTest {
         val withdrawal = start.indexOf("withdrawConnectionAttempt()")
         assertTrue(withdrawal >= 0)
         assertTrue("A new attempt first clears the previous presentation stage", withdrawal < start.indexOf("val waiting ="))
-        assertFalse("Connection waiting uses the existing full-screen artwork, not another modal", start.contains("AlertDialog"))
+        assertFalse("Connection waiting uses the existing full-screen page, not another modal", start.contains("AlertDialog"))
         assertFalse(source.contains("connectionProgressDialog"))
         assertFalse(start.contains("postDelayed"))
         assertFalse(source.contains("RESTORE_ESCAPE_DELAY_MS"))

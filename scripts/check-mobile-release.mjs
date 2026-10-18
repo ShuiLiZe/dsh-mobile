@@ -202,8 +202,8 @@ async function checkAndroid() {
     fail('Android native bridge must accept only exact-origin main-frame WebMessages')
   }
   requireSameResourceNames(defaultColors, nightColors, 'color', 'Night theme')
-  if (!mainActivity.includes('R.color.app_setup_scrim') || mainActivity.includes('0x99FFFFFF')) {
-    fail('Android setup artwork must use the theme-aware app_setup_scrim resource')
+  if (mainActivity.includes('setup_background_image') || mainActivity.includes('0x99FFFFFF')) {
+    fail('Android setup pages must use the plain DSH background, not artwork')
   }
   if (!mainActivity.includes('DSHMobile/${BuildConfig.VERSION_NAME}')) {
     fail('Android WebView user agent must report BuildConfig.VERSION_NAME')
