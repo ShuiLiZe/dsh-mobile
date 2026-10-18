@@ -784,6 +784,12 @@ describe('mobile-control localization', () => {
       '--dsw-alias-state-error-primary', '--dsw-alias-state-error-secondary',
       '--dsw-alias-state-success-primary', '--dsw-alias-state-success-tertiary',
       '--dsw-alias-state-warn-label', '--dsw-alias-state-warn-primary', '--dsw-alias-state-warn-tertiary',
+      // DSH-native look (verified in dsh-web-frontend 0.0.1-rc.5): monochrome primary button,
+      // DSH toast, mask and elevation tokens, and DSH font stack.
+      '--dsw-alias-button-primary-fill', '--dsw-alias-button-primary-hover', '--dsw-alias-button-contrast-fill',
+      '--dsw-alias-label-primary-foreground', '--dsw-alias-label-primary-inverted',
+      '--dsw-alias-bg-mask-1', '--dsw-mask-blur',
+      '--dsw-shadow-lv1', '--dsw-shadow-lv2', '--dsw-shadow-lv3',
     ])
     const unknown = new Map()
     for (const file of readdirSync(new URL('../src', import.meta.url))) {
