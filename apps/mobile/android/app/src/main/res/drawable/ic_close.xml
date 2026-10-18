@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DSH line icon: IconCloseOutline16 (@deepseek-ai/dsh-client-ui-primitives). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="20"
+    android:viewportHeight="20">
+    <group
+        android:translateX="2"
+        android:translateY="2">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M14.1168 13.197L13.197 14.1167L1.8833 2.80303L2.80309 1.88324L14.1168 13.197Z" />
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M13.197 1.88326L14.1168 2.80305L2.80309 14.1168L1.8833 13.197L13.197 1.88326Z" />
+    </group>
+</vector>

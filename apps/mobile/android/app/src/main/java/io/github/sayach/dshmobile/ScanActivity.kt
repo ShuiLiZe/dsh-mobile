@@ -204,7 +204,7 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
         updateZoomControls()
 
         val close = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            setImageResource(R.drawable.ic_close)
             imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             contentDescription = getString(R.string.scan_close)
