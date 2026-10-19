@@ -2,6 +2,15 @@
 
 Notable changes are recorded here. GitHub Releases provide the downloadable packages and generated commit notes.
 
+## 0.6.13 - 2026-10-19
+
+- Distinguish inbound HTTP receive timeouts (408 `request_timeout`) and oversized request headers (431 `headers_too_large`) from other malformed HTTP requests (400 `bad_request`). Preserve the existing receive limits and single-attempt POST forwarding; do not automatically retry messages.
+- Add sampled HTTP rejection diagnostics that distinguish parser errors, invalid targets and authenticated upstream prompt rejections without recording request contents, raw packets, Cookies or arbitrary URLs. Connect diagnostic sinks for all Gateway factories, including own-origin and self-signed FRP entries.
+- Add real-page prompt-failure checks for restored text/images and visible errors. Separately reproduce a DSH 0.2.0-rc.2 and 0.2.1-rc.2 lifecycle defect: leaving a Session during a pending send cancels that request and discards its recovery state, including in pure stock profiles without Mobile installed. DSH source remains unchanged; this upstream defect and the exact cause of the reported #234 rejection are not claimed fixed. Thanks @Void-LifeStream for [#234](https://github.com/saya-ch/dsh-mobile/issues/234).
+- Distinguish HTTP receive timeouts and oversized request headers in the Gateway response and add bounded, privacy-preserving rejection diagnostics across all Gateway factories. Existing request limits, authentication checks and single-attempt POST forwarding remain unchanged; this release does not add automatic message retries.
+- Add a packed prompt-failure smoke covering text/image recovery and visible DSH errors on DSH 0.2.0-rc.2 and 0.2.1-rc.2. The optional navigation diagnostic records an upstream Session-lifecycle failure but is not a passing regression lane.
+- Keep DSH source and installed frontend artifacts read-only. The proposed iroh P2P channel in [#235](https://github.com/saya-ch/dsh-mobile/issues/235) is intentionally outside this repository and this release; it requires a separate host-side proof of concept.
+
 ## 0.6.12 - 2026-10-18
 
 - Send explicit non-navigation Fetch Metadata during the Gateway's internal DSH cookie exchange. This avoids the HTML navigation bounce produced by community authentication plugins without accepting arbitrary HTTP 200 pages, following redirects, or forwarding the upstream Cookie to the phone. Thanks @jamorzzz for [#230](https://github.com/saya-ch/dsh-mobile/issues/230).

@@ -4,6 +4,7 @@ import { lstat, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { basename, dirname, extname, join } from 'node:path'
 import {
+  STATUS_CODES,
   createServer as createHttpServer,
   request as requestHttp,
   type ClientRequest,
@@ -33,6 +34,8 @@ import {
 import type { ResolvedGatewayConfig } from './config.js'
 import { AuthFailureRecorder, type AuthFailureEntry } from './auth-failure-log.js'
 export type { AuthFailureEntry } from './auth-failure-log.js'
+import { HttpFailureRecorder, type HttpFailureEntry } from './http-failure-log.js'
+export type { HttpFailureEntry } from './http-failure-log.js'
 import { ClientModulePreferenceStore, parseExcludedClientModules, type ClientModuleEntry, type ClientModulePreferenceView } from './client-module-preferences.js'
 import { renderClientModuleRecoveryPage } from './client-module-recovery.js'
 import { ensureMobileCompatibility, ensureMobileGatewayMarker, MOBILE_COMPAT_PATH } from './mobile-compat-bootstrap.js'
@@ -820,7 +823,7 @@ function rejectUpgrade(socket: Socket, status: number, code: string): void {
   if (socket.destroyed) return
   const body = `${JSON.stringify({ error: code })}\n`
   socket.end([
-    `HTTP/1.1 ${String(status)} ${status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : 'Bad Request'}`,
+    `HTTP/1.1 ${String(status)} ${STATUS_CODES[status] ?? 'Bad Request'}`,
     'Connection: close',
     'Cache-Control: no-store',
     'Content-Type: application/json; charset=utf-8',
@@ -1187,6 +1190,7 @@ export class MobileAccessGateway {
   private readonly clientModuleTasks = new Set<Promise<ClientModulePreferenceView>>()
   private readonly clientModuleRevocations = new Set<Promise<void>>()
   private readonly authFailures: AuthFailureRecorder
+  private readonly httpFailures: HttpFailureRecorder
 
   constructor(
     readonly config: ResolvedGatewayConfig,
@@ -1198,8 +1202,10 @@ export class MobileAccessGateway {
     private readonly onDiscoveryDegraded?: (source: 'broadcast' | 'mdns', code: string) => void,
     clientModulePreferences?: ClientModulePreferenceStore,
     authFailureLog?: (entry: AuthFailureEntry) => void,
+    httpFailureLog?: (entry: HttpFailureEntry) => void,
   ) {
     this.authFailures = new AuthFailureRecorder(authFailureLog)
+    this.httpFailures = new HttpFailureRecorder(httpFailureLog)
     this.clientModulePreferences = clientModulePreferences ?? new ClientModulePreferenceStore(
       join(dirname(config.stateFile), `${basename(config.stateFile)}.client-modules.json`), config.excludedClientModules,
     )
@@ -1313,7 +1319,11 @@ export class MobileAccessGateway {
           rejectUpgrade(client, mapped.status, mapped.code)
         })
       })
-      server.on('clientError', (_error, socket) => { rejectUpgrade(socket as Socket, 400, 'bad_request') })
+      server.on('clientError', (error, socket) => {
+        const nodeCode = 'code' in error && typeof error.code === 'string' ? error.code : undefined
+        const failure = this.httpFailures.recordParser(nodeCode)
+        rejectUpgrade(socket as Socket, failure.status, failure.code)
+      })
       await new Promise<void>((resolve, reject) => {
         const failed = (error: Error): void => { reject(error) }
         server.once('error', failed)
@@ -1755,7 +1765,13 @@ export class MobileAccessGateway {
   }
 
   private async handleExternalRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const target = parseRequestTarget(request.url)
+    let target: ReturnType<typeof parseRequestTarget>
+    try {
+      target = parseRequestTarget(request.url)
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 400) this.httpFailures.recordTarget()
+      throw error
+    }
     const policy = this.requirePolicy()
     const isMutation = request.method !== 'GET' && request.method !== 'HEAD'
     assertExternalTrust(request, policy, isMutation)
@@ -2931,6 +2947,7 @@ export class MobileAccessGateway {
       setSecurityHeaders(response, this.tlsEnabled, 'proxied')
       const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
       const statusCode = proxied.statusCode ?? 502
+      this.httpFailures.recordUpstream(request.method, request.url?.split('?', 1)[0] ?? '', statusCode)
       const cacheControl = revisionedStaticCacheControl(request, statusCode)
       if (cacheControl !== undefined) headers['cache-control'] = cacheControl
       const compressible = canCompressResponse(request, proxied)
