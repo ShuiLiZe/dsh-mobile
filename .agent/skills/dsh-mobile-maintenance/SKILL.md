@@ -30,7 +30,7 @@ This skill has no required external-skill dependency; its references and reposit
 
 ## Cross-layer decisions
 
-- Keep DSH source unchanged for plugin features unless an upstream change is explicitly in scope. Inspect upstream frontend consumers when necessary; CSS, service names or slot IDs cannot be inferred from a screenshot or remembered release.
+- Treat DSH source and installed frontend artifacts as read-only, as required by `AGENTS.md`. Inspect actual upstream consumers when necessary; use documented plugin extension points, not private implementation patches or rewritten bundles. When the defect belongs upstream and no safe public seam can repair it, preserve a reproduction and state that limit instead of presenting a plugin workaround as a fix.
 - Reuse DSH's existing uploads, command handling, menus, theme tokens and capability seams before adding another implementation. Mobile-only controls belong to the authenticated web page or App that owns them; they should not alter the desktop unintentionally.
 - Treat paired devices and local extension hosts as trusted operators, not a sandbox. Preserve exact-Origin, authentication, CSRF, certificate and revocation checks. Hiding a frontend module is not revoking authorization or disabling a Host plugin.
 - Optional frontend modules can be excluded as whole modules, subject to required/dependency checks. This is not arbitrary per-widget hiding or a promise to adapt every third-party plugin combination.

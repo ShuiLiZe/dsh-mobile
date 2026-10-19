@@ -1,10 +1,12 @@
-import { Context } from '@deepseek-ai/cordis'
+import { Context, type Message } from '@deepseek-ai/cordis'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { createHash } from 'node:crypto'
 import { createServer, request as requestHttp, type IncomingMessage } from 'node:http'
+import { request as requestHttps } from 'node:https'
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import type { AddressInfo } from 'node:net'
+import { connect, type AddressInfo } from 'node:net'
+import { checkServerIdentity, connect as connectTls } from 'node:tls'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { generate } from 'selfsigned'
@@ -22,6 +24,9 @@ import { DESKTOP_ADMIN_HEADER, DESKTOP_ADMIN_MARKER } from '../src/local-admin-h
 import { buildExtensionWorkerEntry } from './helpers/extension-worker-build.js'
 import { parseUnavailableExtensionHosts } from '../src/extension-recovery-ui.js'
 import { CaddyComponentManager, CADDY_VERSION, type CaddyArtifact } from '../src/caddy-component.js'
+import { FunnelController, type FunnelControllerOptions } from '../src/funnel.js'
+import { FrpController, type FrpControllerOptions } from '../src/frp.js'
+import type { MobileAccessGateway } from '../src/gateway.js'
 
 const contexts: Context[] = []
 const temporaryDirectories: string[] = []
@@ -164,6 +169,82 @@ async function pairOriginBackend(port: number, token: string): Promise<number> {
     request.once('error', reject)
     request.end(body)
   })
+}
+
+interface GatewayTestTrust { readonly ca: string; readonly hostname: string }
+
+async function rejectGatewayPrompt(port: number, origin: string, trust?: GatewayTestTrust): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const options = {
+      host: '127.0.0.1', port, path: '/api/session/prompt', method: 'POST', agent: false as const,
+      headers: { host: new URL(origin).host, origin, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', 'content-length': '2' },
+      ...(trust === undefined ? {} : {
+        ca: trust.ca,
+        checkServerIdentity: (_hostname: string, certificate: Parameters<typeof checkServerIdentity>[1]) => checkServerIdentity(trust.hostname, certificate),
+      }),
+    }
+    const request = (trust === undefined ? requestHttp : requestHttps)(options, response => {
+      response.resume()
+      response.once('error', reject)
+      response.once('end', () => resolve(response.statusCode ?? 0))
+    })
+    request.once('error', reject)
+    request.setTimeout(5_000, () => request.destroy(new Error('Owned rejection request timed out')))
+    request.end('{}')
+  })
+}
+
+async function overflowGatewayHeaders(port: number, origin: string, trust?: GatewayTestTrust): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = trust === undefined
+      ? connect(port, '127.0.0.1')
+      : connectTls({
+          host: '127.0.0.1', port, ca: trust.ca,
+          checkServerIdentity: (_hostname, certificate) => checkServerIdentity(trust.hostname, certificate),
+        })
+    const chunks: Buffer[] = []
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error('Owned parser rejection timed out')) }, 5_000)
+    socket.on('data', chunk => { chunks.push(Buffer.from(chunk)) })
+    socket.once('error', reject)
+    socket.once('close', () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString('utf8')) })
+    socket.once(trust === undefined ? 'connect' : 'secureConnect', () => {
+      socket.write([
+        'POST /api/session/prompt HTTP/1.1', `Host: ${new URL(origin).host}`,
+        `X-Private: ${'prompt-private-header-secret-234'.repeat(1_000)}`,
+        'Content-Length: 2', 'Connection: close', '', '{}',
+      ].join('\r\n'))
+    })
+  })
+}
+
+function observePluginWarnings(context: Context): Message[] {
+  const messages: Message[] = []
+  context.logger.exporter({
+    levels: { default: -1, 'dsh-mobile': 3 },
+    export(message) { if (message.name === 'dsh-mobile' && message.type === 'warn') messages.push(message) },
+  })
+  return messages
+}
+
+async function assertGatewayDiagnosticComposition(
+  messages: Message[], port: number, origin: string, trust?: GatewayTestTrust,
+): Promise<void> {
+  const before = messages.length
+  expect(await rejectGatewayPrompt(port, origin, trust)).toBe(401)
+  const overflow = await overflowGatewayHeaders(port, origin, trust)
+  expect(overflow).toContain('HTTP/1.1 431 Request Header Fields Too Large')
+  expect(overflow).toContain('{"error":"headers_too_large"}\n')
+  const actual = messages.slice(before)
+  expect(actual.filter(message => message.args[0] === 'auth failure %s')).toEqual([
+    expect.objectContaining({ args: ['auth failure %s', JSON.stringify({
+      kind: 'authorize', status: 401, method: 'POST', path: '/api/session/prompt',
+      sessionCookie: false, csrfHeader: false, csrfCookies: 0, origin, site: 'same-origin',
+    })] }),
+  ])
+  expect(actual.filter(message => message.args[0] === 'http failure %s')).toEqual([
+    expect.objectContaining({ args: ['http failure %s', JSON.stringify({ kind: 'parser', status: 431, code: 'HPE_HEADER_OVERFLOW' })] }),
+  ])
+  expect(JSON.stringify(actual)).not.toContain('prompt-private-header-secret-234')
 }
 
 /** Sends protocol requests only to the owned loopback listener behind the selected Origin. */
@@ -422,6 +503,81 @@ describe('private HTTP origin gateway configuration', () => {
 })
 
 describe('stock DSH lifecycle', () => {
+  it.each(['lan', 'own-Origin'] as const)('records real auth and HTTP parser failures through the %s Gateway factory', async mode => {
+    const mounted = await mount(mode === 'lan')
+    const messages = observePluginWarnings(mounted.context)
+    let port: number
+    let origin: string
+    if (mode === 'lan') {
+      const status = await invoke(mounted.route, 'GET', '/api/mobile-access/lan/control')
+      origin = responseString(JSON.parse(status.body) as Record<string, unknown>, 'origin')
+      port = Number(new URL(origin).port)
+    } else {
+      const selected = await invoke(mounted.route, 'POST', '/api/mobile-access/remote/provider', '{"provider":"origin"}')
+      expect(selected.status).toBe(200)
+      const started = await startOriginOnFreePort(mounted.route)
+      expect(JSON.parse(started.started.body)).toMatchObject({ provider: 'origin', running: true, state: 'ready' })
+      port = started.port
+      origin = started.form.publicOrigin
+    }
+    await assertGatewayDiagnosticComposition(messages, port, origin)
+    await mounted.context.fiber.dispose()
+    const log = await readFile(join(mounted.directory, 'logs', 'dsh-mobile.log'), 'utf8')
+    expect(log).toContain('auth failure')
+    expect(log).toContain('http failure')
+    expect(log).toContain('HPE_HEADER_OVERFLOW')
+    expect(log).not.toContain('prompt-private-header-secret-234')
+  })
+
+  it('records both diagnostics through the actual ordinary remote and self-signed FRP factories without launching a tunnel', async () => {
+    const factories: {
+      remote?: FunnelControllerOptions['createGateway']
+      frp?: FrpControllerOptions['createGateway']
+    } = {}
+    const initializeFunnel = FunnelController.prototype.initialize
+    const initializeFrp = FrpController.prototype.initialize
+    vi.spyOn(FunnelController.prototype, 'initialize').mockImplementation(function (this: FunnelController, initialState) {
+      const options = Reflect.get(this, 'options') as FunnelControllerOptions
+      factories.remote = options.createGateway
+      return initializeFunnel.call(this, initialState)
+    })
+    vi.spyOn(FrpController.prototype, 'initialize').mockImplementation(function (this: FrpController, initialState) {
+      const options = Reflect.get(this, 'options') as FrpControllerOptions
+      factories.frp = options.createGateway
+      return initializeFrp.call(this, initialState)
+    })
+    const mounted = await mount()
+    const messages = observePluginWarnings(mounted.context)
+    if (factories.remote === undefined || factories.frp === undefined) throw new Error('Plugin did not compose both remote Gateway factories')
+    const gateways: MobileAccessGateway[] = []
+    try {
+      const remote = await factories.remote('https://gateway-fixture.example.com')
+      gateways.push(remote)
+      await assertGatewayDiagnosticComposition(messages, remote.address().port, remote.address().origin)
+      const settings = parseFrpSettings({
+        mode: 'attach', entryTls: 'self-signed', publicPort: 33_080,
+        publicOrigin: 'https://1.2.3.4', serverAddress: '1.2.3.4', serverPort: 7000,
+        token: '0123456789abcdef0123456789abcdef',
+      })
+      // Invoke only the injected Gateway factory. No frpc launch, public DNS,
+      // remote listener, vhost exposure check or public discovery probe runs.
+      const ingress = await factories.frp('https://1.2.3.4:33080', settings)
+      gateways.push(ingress)
+      const caFile = ingress.config.pairingCaFile
+      if (caFile === undefined) throw new Error('FRP ingress did not retain its pairing CA')
+      await assertGatewayDiagnosticComposition(messages, ingress.address().port, ingress.address().origin, {
+        ca: await readFile(caFile, 'utf8'), hostname: '1.2.3.4',
+      })
+    } finally {
+      await Promise.all(gateways.map(gateway => gateway.close()))
+    }
+    await mounted.context.fiber.dispose()
+    const log = await readFile(join(mounted.directory, 'logs', 'dsh-mobile.log'), 'utf8')
+    expect(log.match(/http failure/gu)).toHaveLength(2)
+    expect(log.match(/auth failure/gu)).toHaveLength(2)
+    expect(log).not.toContain('prompt-private-header-secret-234')
+  })
+
   it('loads LAN and the selected remote preference while handing prepared states to inactive providers', async () => {
     const load = vi.spyOn(JsonMobileAccessControlStore.prototype, 'load')
     const disable = vi.spyOn(JsonMobileAccessControlStore.prototype, 'disableIfPresent')

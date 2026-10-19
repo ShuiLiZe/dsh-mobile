@@ -20,6 +20,14 @@ Both [#126](https://github.com/saya-ch/dsh-mobile/issues/126) and [#146](https:/
 
 Plugin 0.6.11 and later write limited `auth failure` HTTP diagnostics to the plugin log (`$DSH_HOME/mobile-access/logs/dsh-mobile.log`): authorization versus CSRF rejection, status, method, a safe route or route category, related Cookie/header presence and counts, normalized Origin and recognized fetch-site values. It omits tokens, Cookie values, query strings and arbitrary original paths. Each Gateway rate-limits its two categories separately: the first event is immediate and same-category rejections aggregate within a 30-second window; `suppressed` counts previously suppressed records of that category, not all requests or only the current path. This helps investigate missing credentials and CSRF failures; it does not automatically repair a 401/403. The absence of a record does not establish successful authentication: earlier Host/Origin rejections, WebSocket upgrades and native pairing/renewal are outside these two recording points. Review logs before sharing them.
 
+## HTTP 400, 408 and 431 (in development)
+
+The unpublished plugin correction distinguishes request receive timeouts as `408 request_timeout` and oversized headers as `431 headers_too_large`; other malformed HTTP requests remain `400 bad_request`. Older versions may return 400 with the same short JSON for all of them, so a status and a 24-byte body do not identify the cause.
+
+New `http failure` diagnostics distinguish three per-Gateway categories: `parser` for HTTP parsing/receive failures, `target` for invalid request targets, and `upstream` for an authenticated `POST /api/session/prompt` rejected upstream. The first event of each kind is immediate; repeats aggregate for 30 seconds, with `suppressed` counting earlier suppressed events of that kind. Logs exclude raw errors, request bodies, raw packets, Cookies, Tokens, queries and arbitrary URLs. No record does not establish success.
+
+`upstreamTimeoutMs` governs upstream transport waits and also configures the complete inbound-request receive deadline. A continuously active upload can still exceed that total deadline, and Node's periodic checks affect the observed firing time. Do not delete pairings, clear App data or automatically resend because of HTTP 400 alone. Identify the rejection layer using the actual response body, Content-Type, exact versions and redacted proxy upstream status. Check the Session result before retrying an operation whose execution outcome is unknown.
+
 ## Keep event streams distinct
 
 In DSH 0.2.0-rc.2, `/plugins/events` is the SSE stream for plugin-module graph and build updates, not conversation-message delivery. Its `200` response, small body or repeated reconnects alone cannot establish successful delivery, failure or a missing processing animation. Inspect the `/api/remote.mux` WebSocket and the actual HTTP request for that operation as well.

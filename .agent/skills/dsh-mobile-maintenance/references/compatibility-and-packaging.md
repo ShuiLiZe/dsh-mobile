@@ -34,7 +34,7 @@ A settings launcher may replace a direct button with an account menu while retai
 
 For skin conflicts, inspect the attached images as well as the installed package bytes: a missing background, unreadable drawer, shadowed header and blank trace are separate observations. A fix in the skin repository does not establish that the same-version npm package includes it. Reproduce the reported artifact before widening compatibility claims; [skin guidance](../../../../docs/SKIN_COMPATIBILITY.en.md) distinguishes existing semantic markers and per-device module selection from recreating a skin's private layout.
 
-Keep changes within the plugin when possible. Prefer an existing optional capability or version-independent feature detection to a brittle version allowlist. When the documented DSH seam cannot provide the requested behavior, explain the limitation and defer or explicitly propose the upstream change.
+Keep implementation changes within the plugin and leave DSH source and installed artifacts unchanged. Prefer an existing optional capability or version-independent feature detection to a brittle version allowlist. When the documented DSH seam cannot provide the requested behavior, explain the limitation and retain an isolated upstream reproduction rather than patching private implementation or bundles.
 
 ## Source, package and live installation are separate
 

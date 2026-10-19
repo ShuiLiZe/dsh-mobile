@@ -50,6 +50,8 @@ These fixtures do not submit a model request or read the normal DSH home. Browse
 
 Transport recovery uses the same isolated packed DSH runtime described below and a loopback-only fault proxy. It requires healthy HTTP during an actual mux interruption, a new 101 handshake and fresh Workspace baseline, and an unchanged document/editor/draft. `--interactions` adds a test-only Host question through the real Loader, checks desktop/mobile delivery and reconnection, and rejects one answer request before an explicit retry. It does not simulate an approval audit or establish a reporter's Cloudflare deployment. `--negative-control-mux` deliberately leaves the mux unavailable and must fail with `Mux recovery negative control detected`; another setup error is not a passing negative control.
 
+`npm run smoke:prompt-failure` uses the same explicit runtime and packed-tarball inputs. It rejects two real Send requests with HTTP 400 at the browser route, verifies restored text/images and a visible stock error, and requires zero forwarded prompts and no automatic retry. `--stock` omits Mobile entirely for a direct DSH control. Optional `--check-navigation` adds held sends followed by Session navigation and remains a strict failing diagnostic where upstream discards recovery state; it is not part of the passing default lane. No model request is allowed. Keep DSH code and artifacts unchanged, and distinguish a navigation cancellation from an HTTP 400 actually delivered to the page.
+
 `--negative-control-import` makes the owned classic-script client fail at its top level before registering its module. The script must download successfully, fail during initial mobile boot, and be identified by its module and resource mapping; only completed cleanup permits the `Module evaluation negative control detected` marker. Both negative controls refuse their marker if diagnostic collection, evidence persistence or cleanup also fails. Startup failures retain bounded boot, response, request-failure and execution evidence under `local/mobile-boot-diagnostics/`. HTTP success alone does not prove that a module executed or registered.
 
 ## Test the packed plugin in DSH
@@ -95,7 +97,7 @@ The compatibility, viewport and missing-companion negative lanes emit a final `D
 
 Follow the [Android build instructions](apps/mobile/README.md#build) and keep both app manuals aligned. Preserve application identity, stable signing and stored pairings. Never uninstall or clear a user's app to bypass a signing mismatch. Ask before altering real device data; use a separate test package for destructive test flows.
 
-Review the internal [design reference](design-system/dsh-mobile/MASTER.md) for native screens and plugin-owned controls. Do not change DSH source to implement plugin features without a separately authorized upstream change.
+Review the internal [design reference](design-system/dsh-mobile/MASTER.md) for native screens and plugin-owned controls. DSH source and installed frontend artifacts stay read-only. Use documented extension points for plugin behavior; isolate and report an upstream defect rather than patching DSH code or bundles to make a Mobile check pass.
 
 For macOS cloudflared changes, build and run `npm run smoke:cloudflared-component`. It verifies official archives and reinitialization in temporary state, then removes its owned files; it never executes downloaded Mach-O binaries. `-- --archive-dir <directory>` reuses independently verified official archives.
 

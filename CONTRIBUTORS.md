@@ -136,7 +136,7 @@ Thanks [@xhwxt](https://github.com/xhwxt) for the document-picker proposal in [#
 | [@sortjiajun](https://github.com/sortjiajun) | [#90](https://github.com/saya-ch/dsh-mobile/issues/90) |
 | [@StrawberryAO](https://github.com/StrawberryAO) | [#39](https://github.com/saya-ch/dsh-mobile/issues/39) |
 | [@Surpass567](https://github.com/Surpass567) | [#80](https://github.com/saya-ch/dsh-mobile/issues/80), [#81](https://github.com/saya-ch/dsh-mobile/issues/81) |
-| [@Void-LifeStream](https://github.com/Void-LifeStream) | [#205](https://github.com/saya-ch/dsh-mobile/issues/205), [#219](https://github.com/saya-ch/dsh-mobile/issues/219), [#225](https://github.com/saya-ch/dsh-mobile/issues/225) |
+| [@Void-LifeStream](https://github.com/Void-LifeStream) | [#205](https://github.com/saya-ch/dsh-mobile/issues/205), [#219](https://github.com/saya-ch/dsh-mobile/issues/219), [#225](https://github.com/saya-ch/dsh-mobile/issues/225), [#234](https://github.com/saya-ch/dsh-mobile/issues/234) |
 | [@WalkerJay666](https://github.com/WalkerJay666) | [#201](https://github.com/saya-ch/dsh-mobile/issues/201) |
 | [@up-and-down-0618](https://github.com/up-and-down-0618) | [#115](https://github.com/saya-ch/dsh-mobile/issues/115) |
 | [@taki-ohh](https://github.com/taki-ohh) | [#19](https://github.com/saya-ch/dsh-mobile/issues/19) |
