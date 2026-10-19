@@ -278,6 +278,11 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).not.toContain('margin:0 !important; padding:0 !important; gap:10px !important; }')
   })
 
+  it('keeps the newer composer stat pills and context meter on one centred row', () => {
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-center] [data-composer-dock] { display:flex !important; flex-wrap:wrap !important; justify-content:center !important; align-items:center !important;')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-center] :is([data-composer-card] ~ [data-composer-dock],[data-composer-card] ~ * [data-composer-dock]) > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup]) { box-sizing:border-box !important; width:auto !important; max-width:none !important; flex:0 0 auto !important; align-self:center !important; margin:0 !important; padding:0 !important;')
+  })
+
   it('wraps the composer dock instead of assuming a fixed column count', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_dock"]:has([data-composer-stats]) { display:flex !important; flex-wrap:wrap !important; justify-content:flex-start !important; align-items:center !important')
     expect(NATIVE_MOBILE_STYLES).not.toContain('grid-template-columns:minmax(0,1fr) max-content !important')

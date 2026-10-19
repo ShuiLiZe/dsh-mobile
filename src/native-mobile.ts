@@ -212,6 +212,17 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [data-composer-stats] [class*="_pill"] svg { display:inline-block !important; vertical-align:-2px !important; margin-right:6px !important; }
   [data-dsh-mobile-center] [data-composer-stats]:has(span[class*="_pill"]) { flex-wrap:wrap !important; overflow:visible !important; }
   [data-dsh-mobile-center] [data-composer-stats] span[class*="_pill"] { flex:0 1 auto !important; max-width:100% !important; white-space:normal !important; overflow:visible !important; overflow-wrap:anywhere !important; text-overflow:clip !important; }
+  /* Newer DSH renders the composer statistics as separate [data-composer-stat]
+     pills inside [data-composer-dock], beside the context meter. The legacy
+     metadata rules above stretch the meter's _root, pad it and pull it 6px
+     down, which pushed the ring below the pills and squeezed every label to
+     an ellipsis. Center the dock, let whole pills wrap, and keep the meter at
+     its own size on the pills' baseline. */
+  [data-dsh-mobile-center] [data-composer-dock] { display:flex !important; flex-wrap:wrap !important; justify-content:center !important; align-items:center !important; column-gap:2px !important; row-gap:0 !important; width:100% !important; max-width:100% !important; padding-bottom:2px !important; }
+  [data-dsh-mobile-center] [data-composer-dock] [data-composer-stat] { flex:0 1 auto !important; min-width:0 !important; max-width:100% !important; margin:0 !important; font-size:11px !important; line-height:18px !important; }
+  [data-dsh-mobile-center] [data-composer-dock] [data-composer-stat] > [class*="_pill"] { padding:1px 6px !important; gap:4px !important; }
+  [data-dsh-mobile-center] :is([data-composer-card] ~ [data-composer-dock],[data-composer-card] ~ * [data-composer-dock]) > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup]) { box-sizing:border-box !important; width:auto !important; max-width:none !important; flex:0 0 auto !important; align-self:center !important; margin:0 !important; padding:0 !important; font-size:11px !important; line-height:18px !important; }
+  [data-dsh-mobile-center] [data-composer-dock] > [class*="_root"] > [class*="_trigger"][aria-haspopup] { padding:1px 6px !important; font-size:11px !important; line-height:18px !important; }
   /* Message runtime details are inline on desktop. Give the clock/runtime
      label its own wrapping row on narrow screens so TTFT and throughput do
      not push the action buttons or clip at the viewport edge. */
