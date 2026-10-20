@@ -238,8 +238,9 @@ describe('mobile native Back before layout navigation', () => {
   })
 
   it('lifts DS Bot menus and dialogs above the mobile shell', () => {
-    expect(MOBILE_LAYOUT_STYLES).toContain('body:has(.dshm-shell) :is(.bt-menu,.bt-react-strip,.bt-update-pop,.bt-connect-tip){z-index:340!important}')
-    expect(MOBILE_LAYOUT_STYLES).toContain('body:has(.dshm-shell) :is(.bt-settings-layer,.bt-mem-layer,.bt-palette-layer){z-index:335!important}')
+    expect(MOBILE_LAYOUT_STYLES).toContain('body.dshm-scoped :is(.bt-menu,.bt-react-strip,.bt-update-pop,.bt-connect-tip){z-index:340!important}')
+    expect(MOBILE_LAYOUT_STYLES).toContain('body.dshm-scoped :is(.bt-settings-layer,.bt-mem-layer,.bt-palette-layer){z-index:335!important}')
+    expect(MOBILE_LAYOUT_STYLES).not.toContain(':has(')
   })
 
   it('ignores hidden surfaces, requires a cancelable request, and removes the capture listener', () => {

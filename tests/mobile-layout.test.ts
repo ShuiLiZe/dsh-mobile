@@ -734,10 +734,13 @@ describe('dedicated mobile layout boot', () => {
     // menus), outside .dshm-shell, so the 16px floor must scope from the body
     // itself or Safari still zooms those inputs and never zooms back.
     expect(MOBILE_LAYOUT_STYLES).toContain(
-      'body:has(.dshm-shell) :is(input,textarea,[contenteditable=true],[contenteditable=plaintext-only],[contenteditable=""]){font-size:max(16px,1em,var(--dsh-content-font-size,1em))!important}',
+      'body.dshm-scoped :is(input,textarea,[contenteditable=true],[contenteditable=plaintext-only],[contenteditable=""]){font-size:max(16px,1em,var(--dsh-content-font-size,1em))!important}',
     )
     expect(MOBILE_LAYOUT_STYLES).not.toContain('.dshm-shell :is(input,textarea,')
     expect(MOBILE_LAYOUT_STYLES).not.toContain('.dshm-shell textarea{font-size:16px}')
+    // Same scoping as body:has(.dshm-shell) through a body class, so transcript
+    // mutations no longer force the style engine to re-evaluate a :has().
+    expect(MOBILE_LAYOUT_STYLES).not.toContain(':has(')
   })
 
   it('opens the wide sidebar by default without resetting explicit toggles', () => {
