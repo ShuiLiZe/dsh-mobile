@@ -11,6 +11,7 @@ import { parseFrpSettings, type FrpSettings } from './frp-config.js'
 import { installNativeMobileSurface, NATIVE_MOBILE_STYLES, resolveNativeMobileLanguage } from './native-mobile.js'
 import { installVoiceSession } from './voice-session.js'
 import { installMobileFontPreference, MobileFontSizeRow } from './mobile-font.js'
+import { startVisibilityPoll } from './visibility-poll.js'
 import { MobileDisplayScaleRow } from './mobile-display-scale.js'
 import { MobileNativeSettingsActionController, type MobileNativeSettingsAction } from './mobile-native-settings-action.js'
 import { CLIENT_MODULE_STYLES, ClientModuleSettingsRow, closeClientModuleDialog, disposeClientModuleDialogs } from './client-module-ui.js'
@@ -3357,7 +3358,10 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   void controlRequestJson('/api/mobile-access/release').then(renderRelease, () => {})
   void controlRequestJson('/api/mobile-access/lan/control').then(render, error => { status.textContent = t('requestFailed', { error: String(error) }) })
   loadRemote()
-  const remotePoll = window.setInterval(() => { if (!panel.hidden && !remoteView.hidden) loadRemote() }, 1_500)
+  // The remote panel only ever renders one control-dialog section: pause its
+  // 1.5 s read while the document (or the panel) is hidden and catch up once as
+  // soon as the user looks again.
+  const disposeRemotePoll = startVisibilityPoll(() => { if (!panel.hidden && !remoteView.hidden) loadRemote() }, 1_500)
   const pollWsBlocked = (): void => {
     void controlRequestJson('/api/mobile-access/remote/websocket-paths/blocked').then(blocked => {
       const raw = Array.isArray(blocked.blocked) ? blocked.blocked : []
@@ -3370,7 +3374,7 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
     }, () => { /* gateway unreachable; dot keeps its last state */ })
   }
   const wsBlockedPoll = window.setInterval(() => { pollWsBlocked(); if (!panel.hidden) void extensionRecovery.refresh() }, 20_000)
-  return { remove: () => { lifecycle.abort(); extensionRecovery.dispose(); window.clearInterval(remotePoll); window.clearInterval(wsBlockedPoll); window.removeEventListener('focus', retryAfterSetup); document.removeEventListener('visibilitychange', retryAfterSetup); document.removeEventListener('pointerdown', dismiss); root.remove() }, toggle: () => { setOpen(panel.hidden !== false) }, isOpen: () => !panel.hidden }
+  return { remove: () => { lifecycle.abort(); extensionRecovery.dispose(); disposeRemotePoll(); window.clearInterval(wsBlockedPoll); window.removeEventListener('focus', retryAfterSetup); document.removeEventListener('visibilitychange', retryAfterSetup); document.removeEventListener('pointerdown', dismiss); root.remove() }, toggle: () => { setOpen(panel.hidden !== false) }, isOpen: () => !panel.hidden }
 }
 
 function mobileRequest(path: string, init: RequestInit = {}): Promise<Response> {
