@@ -195,6 +195,7 @@ class MainActivity : Activity() {
     private val pairingGeneration: Int get() = pairingAttemptGate.generation
     private var connectionCenterStatus: TextView? = null
     private var recoveryAttempt = 0
+    private var lastForegroundProbeAt = 0L
     private val recoveryScheduled: Boolean get() = restoreAttemptGate.retryPending
     private val warnedTailscaleOrigins = mutableSetOf<String>()
     private val deviceStatusPoller by lazy {
@@ -320,6 +321,25 @@ class MainActivity : Activity() {
         webView?.onResume()
         window.decorView.requestApplyInsets()
         if (deviceListVisible && showingSetup) refreshDeviceStatuses(pairedDeviceStore.load())
+        probeAfterForegroundReturn()
+    }
+
+    /**
+     * A page that was rendered before the phone slept or lost Wi-Fi keeps showing stale content.
+     * One bounded liveness check restores trust and transport; the interval guard keeps repeated
+     * resumes from issuing a burst of requests.
+     */
+    private fun probeAfterForegroundReturn() {
+        if (isFinishing || isDestroyed || pendingConnection != null) return
+        if (webView == null || gatewayOrigin == null) return
+        if (failureDialog?.isShowing == true) return
+        val now = System.currentTimeMillis()
+        if (!ConnectionBackoff.shouldProbeOnForeground(lastForegroundProbeAt, now)) return
+        lastForegroundProbeAt = now
+        if (!canRecoverAutomatically()) return
+        if (recoveryScheduled) return
+        // A resumed page falls back to the mounted-page path so a live document is not reloaded.
+        if (!scheduleAutomaticRecovery()) return
     }
 
     override fun onPause() {
@@ -949,9 +969,10 @@ class MainActivity : Activity() {
     private fun refreshDeviceStatuses(devices: List<PairedDeviceRecord>) {
         deviceListRefreshRunnable?.let(deviceStatusHandler::removeCallbacks)
         deviceStatusPoller.refresh(devices)
+        val interval = ConnectionBackoff.deviceProbeTickMs(devices, System.currentTimeMillis())
         deviceListRefreshRunnable = Runnable {
             if (!isFinishing && !isDestroyed && deviceListVisible && showingSetup && pairedDeviceStore.load().isNotEmpty()) refreshDeviceStatuses(pairedDeviceStore.load())
-        }.also { deviceStatusHandler.postDelayed(it, DEVICE_STATUS_REFRESH_MS) }
+        }.also { deviceStatusHandler.postDelayed(it, interval) }
     }
 
     private fun applyDeviceStatusResult(device: PairedDeviceRecord, result: Result<NativeProbe>) {
@@ -2228,9 +2249,9 @@ class MainActivity : Activity() {
 
     private fun scheduleAutomaticRecovery(): Boolean {
         if (recoveryScheduled) return true
-        if (recoveryAttempt >= RECOVERY_DELAYS_MS.size || !canRecoverAutomatically()) return false
+        if (recoveryAttempt >= ConnectionBackoff.RECOVERY_DELAYS || !canRecoverAutomatically()) return false
         if (pendingConnection == null) startConnectionAttempt(accessMode, preserveBrowser = webView)
-        val delay = RECOVERY_DELAYS_MS[recoveryAttempt++]
+        val delay = ConnectionBackoff.recoveryDelay(recoveryAttempt++)
         recoveryHandler.postDelayed(restoreAttemptGate.retryCallback {
             if (!isFinishing && !isDestroyed) recoverAutomatically()
         }, delay)
@@ -2259,6 +2280,11 @@ class MainActivity : Activity() {
                 ExhaustedRecoveryAction.IGNORE -> Unit
                 ExhaustedRecoveryAction.KEEP_PAGE -> {
                     finishConnectionAttempt()
+                    // A retained page only keeps its budget while it still answers; a later failure
+                    // starts a fresh backoff window instead of inheriting an exhausted one.
+                    recoveryAttempt = 0
+                    restoreAttemptGate.cancelRetry()
+                    if (scheduleAutomaticRecovery()) return@probeMountedDshPage
                     showLoadFailure(LoadFailure.NETWORK)
                 }
                 ExhaustedRecoveryAction.SHOW_CONNECTIONS -> fallback()
@@ -2716,6 +2742,9 @@ class MainActivity : Activity() {
                 if (ownsBrowser()) {
                     displayScale.onDocumentReady()
                     retryUrl = origin.serialized
+                    // A committed page proves the transport recovered: the next outage restarts the
+                    // backoff window at its first delay instead of using up an earlier budget.
+                    cancelAutomaticRecovery()
                     CookieManager.getInstance().flush()
                     nativeBridge?.injectPage()
                     secureWebViewClient?.currentDocumentGeneration?.let(::inspectVisibleContent)
@@ -3308,7 +3337,6 @@ class MainActivity : Activity() {
         const val TASK_NOTIFICATION_PERMISSION_REQUEST = 4105
         const val SCAN_QR_REQUEST = 4106
         const val VOICE_PERMISSION_REQUEST = 4107
-        const val DEVICE_STATUS_REFRESH_MS = 20_000L
         const val DEVICE_UNDO_TIMEOUT_MS = 6_000L
         const val LIVE_DOCUMENT_PROBE_TIMEOUT_MS = 2_000L
         const val MOBILE_BACK_TIMEOUT_MS = 1_500L
@@ -3316,7 +3344,6 @@ class MainActivity : Activity() {
         const val LAN_CONNECTION_BUDGET_MS = 30_000L
         const val REMOTE_CONNECTION_BUDGET_MS = 60_000L
         const val APP_RELEASES_URL = "https://github.com/saya-ch/dsh-mobile/releases/latest"
-        val RECOVERY_DELAYS_MS = longArrayOf(0L, 1_000L, 3_000L, 8_000L)
         val MIME_TYPE = Regex("^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+*-]+$")
         val UNSAFE_FILENAME = Regex("[\\\\/:*?\"<>|\\p{Cc}]")
     }
