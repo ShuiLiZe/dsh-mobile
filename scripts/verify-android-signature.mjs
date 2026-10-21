@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 
 // Run only after apksigner verify succeeds; this checks the established release identity.
-const expected = 'f46bbee7dbe47d18f49f95f940e1d368f0b79bd8ad9d15d488337fba51e92e87'
+// fork-only: the fork signs with its own long-lived key, not the upstream release certificate.
+const expected = '1a3441ad8cb4791a1c0da07b8ae0aea60b31e4961f6304a0600eedb81cd34ff8'
 const lines = readFileSync(0, 'utf8').split(/\r?\n/u).map(line => line.trim())
 const signerCounts = lines.filter(line => line.startsWith('Number of signers:'))
 const certificates = lines.filter(line => line.includes('certificate SHA-256 digest:'))

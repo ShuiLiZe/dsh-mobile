@@ -24,7 +24,7 @@ The **Paired computers** list shows names, connection types, addresses, reachabi
 | Location | Setting or action |
 | --- | --- |
 | Device list → Settings → Startup behavior | **Open DSH directly** (default) selects the last-used eligible pairing, even when several computers are saved. **Show device list** asks you to choose at each launch. |
-| Device list → Settings → App icon | Choose the mascot or one of six whale-mark colors without changing package identity or paired data. |
+| Launcher icon | The DSH official mark as an adaptive icon, with a themed (monochrome) layer on Android 13+. |
 | DSH page → Settings → General → Switch computer | Return to the paired-computer list. Holding the top-left drawer toggle provides another entry. These actions belong inside the app's webpage, not the device-list settings. |
 | <a id="062-update"></a>DSH page → Settings → General → Page zoom | App 0.6.2+ with plugin 0.6.3+: 80–125%, reset to 100%. Saved app-wide without reloading the conversation. |
 | DSH page → Settings → General → Mobile font size | Default 16px, range 12–32px; saved for the current address. Supported themes also expose code size and body/code font choices. Editable inputs retain a 16px minimum; terminal fonts remain DSH-owned. |

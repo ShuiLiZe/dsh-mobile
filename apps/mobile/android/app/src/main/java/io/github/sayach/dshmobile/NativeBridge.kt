@@ -130,6 +130,9 @@ internal class NativeBridge(
     /** Opaque DSH base background reported after theme resolution. */
     var onPageBackgroundColor: ((color: Int) -> Unit)? = null
 
+    /** DSH alias-token palette reported after every theme change, for native pages. */
+    var onPageTheme: ((palette: DshThemePalette) -> Unit)? = null
+
     /** Called when the authenticated Host revokes this device's credential. */
     var onDeviceRevoked: (() -> Unit)? = null
 
@@ -292,6 +295,7 @@ internal class NativeBridge(
             }
         }
         onPageBackgroundColor = null
+        onPageTheme = null
         onScrollDirection = null
         onDeviceRevoked = null
 
@@ -521,6 +525,10 @@ internal class NativeBridge(
                     val color = Color.rgb(red, green, blue)
                     activity.runOnUiThread { if (installed) onPageBackgroundColor?.invoke(color) }
                 }
+            }
+            "page.theme" -> {
+                val palette = DshNativeTheme.fromMessage(message) ?: return
+                activity.runOnUiThread { if (installed) onPageTheme?.invoke(palette) }
             }
         }
     }
@@ -1152,21 +1160,46 @@ internal class NativeBridge(
             if (!match || (match[4] !== undefined && Number(match[4]) === 0)) return null;
             return [Number(match[1]), Number(match[2]), Number(match[3])].map(channel => Math.max(0, Math.min(255, Math.round(channel))));
           };
+          const themeStyle = () => getComputedStyle(document.body || document.documentElement);
           const resolveChromeColor = () => {
             const rootStyle = getComputedStyle(document.documentElement);
-            const candidates = [rootStyle.getPropertyValue('--dsw-alias-bg-base'), document.body ? getComputedStyle(document.body).backgroundColor : '', rootStyle.backgroundColor, 'rgb(255, 255, 255)'];
+            const candidates = [themeStyle().getPropertyValue('--dsw-alias-bg-base'), rootStyle.getPropertyValue('--dsw-alias-bg-base'), document.body ? getComputedStyle(document.body).backgroundColor : '', rootStyle.backgroundColor, 'rgb(255, 255, 255)'];
             for (const candidate of candidates) { const color = parseChromeColor(candidate); if (color) return color; }
             return [255, 255, 255];
           };
+          const themeTokens = ${DshNativeTheme.TOKENS.joinToString(prefix = "[", postfix = "]") { "'" + it + "'" }};
+          let lastTheme = '';
+          const parseThemeColor = value => {
+            if (!value || !value.trim() || !document.documentElement) return null;
+            const probe = document.createElement('span');
+            probe.style.position = 'fixed'; probe.style.visibility = 'hidden'; probe.style.pointerEvents = 'none'; probe.style.color = value.trim();
+            document.documentElement.appendChild(probe);
+            const resolved = getComputedStyle(probe).color; probe.remove();
+            const match = resolved.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)(?:\D+(\d*(?:\.\d+)?))?\s*\)$/i);
+            if (!match) return null;
+            const alpha = match[4] === undefined || match[4] === '' ? 1 : Number(match[4]);
+            return [Number(match[1]), Number(match[2]), Number(match[3]), alpha * 255].map(channel => Math.max(0, Math.min(255, Math.round(channel))));
+          };
+          const syncTheme = () => {
+            const style = themeStyle(); const tokens = {};
+            for (const name of themeTokens) { const color = parseThemeColor(style.getPropertyValue('--dsw-alias-' + name)); if (!color) return; tokens[name] = color; }
+            const base = tokens['bg-base'];
+            const dark = !!(document.body && document.body.hasAttribute('data-ds-dark-theme')) || (base[0] * 299 + base[1] * 587 + base[2] * 114) < 128000;
+            const key = JSON.stringify([dark, tokens]);
+            if (key === lastTheme) return; lastTheme = key;
+            postEvent({ event: 'page.theme', dark, tokens });
+          };
           const syncChromeColor = () => {
-            chromeFrame = 0; const color = resolveChromeColor(); const key = color.join(',');
+            chromeFrame = 0; syncTheme(); const color = resolveChromeColor(); const key = color.join(',');
             if (key === lastChromeColor) return; lastChromeColor = key;
             postEvent({ event: 'page.background', red: color[0], green: color[1], blue: color[2] });
           };
           const scheduleChromeSync = () => { if (!chromeFrame) chromeFrame = requestAnimationFrame(syncChromeColor); };
           const chromeObserver = new MutationObserver(scheduleChromeSync);
-          chromeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
-          if (document.body) chromeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+          chromeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme', 'data-ds-dark-theme'] });
+          if (document.body) chromeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-theme', 'data-ds-dark-theme'] });
+          // DSH (and installed themes) may inject their stylesheet after boot.
+          chromeObserver.observe(document.head || document.documentElement, { childList: true });
           const colorScheme = matchMedia('(prefers-color-scheme: dark)');
           if (typeof colorScheme.addEventListener === 'function') colorScheme.addEventListener('change', scheduleChromeSync); else if (typeof colorScheme.addListener === 'function') colorScheme.addListener(scheduleChromeSync);
 

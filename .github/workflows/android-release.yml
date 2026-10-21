@@ -25,7 +25,7 @@ jobs:
         with:
           packages: platform-tools
       - name: Install Android API 36
-        run: sdkmanager "platforms;android-36"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v6
       - name: Configure release signing
         env:
@@ -42,6 +42,20 @@ jobs:
           done
           umask 077
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/dsh-mobile-release.jks"
+      - name: Verify the configured signing key before building
+        env:
+          DSH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DSH_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        shell: bash
+        run: |
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          probe="$RUNNER_TEMP/signature-probe.zip"
+          : > "$probe"
+          "$apksigner" sign --ks "$RUNNER_TEMP/dsh-mobile-release.jks" --ks-pass env:DSH_ANDROID_KEYSTORE_PASSWORD --ks-key-alias "$DSH_ANDROID_KEY_ALIAS" --out "$RUNNER_TEMP/signature-probe-signed.zip" "$probe"
+          "$apksigner" verify --verbose --print-certs "$RUNNER_TEMP/signature-probe-signed.zip" > "$RUNNER_TEMP/signature-probe.txt"
+          node scripts/verify-android-signature.mjs < "$RUNNER_TEMP/signature-probe.txt"
+          rm -f "$probe" "$RUNNER_TEMP/signature-probe-signed.zip" "$RUNNER_TEMP/signature-probe.txt"
       - name: Test and build signed Android package
         env:
           DSH_ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/dsh-mobile-release.jks

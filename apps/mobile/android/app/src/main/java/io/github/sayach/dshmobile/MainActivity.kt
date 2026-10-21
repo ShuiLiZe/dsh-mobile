@@ -6,12 +6,12 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.ClipData
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.net.Uri
@@ -116,6 +116,9 @@ class MainActivity : Activity() {
     )
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
+
+    /** App color resolved from the last synchronized DSH theme, else the DSH default resource. */
+    private fun themeColor(colorResource: Int): Int = DshNativeTheme.resolve(this, preferences, colorResource)
     private val lanCredentialStore by lazy { DeviceCredentialStore(this, "lan") }
     private val remoteCredentialStore by lazy { DeviceCredentialStore(this, "remote") }
     private val pairedDeviceStore by lazy { PairedDeviceStore(this) }
@@ -192,6 +195,7 @@ class MainActivity : Activity() {
     private val pairingGeneration: Int get() = pairingAttemptGate.generation
     private var connectionCenterStatus: TextView? = null
     private var recoveryAttempt = 0
+    private var lastForegroundProbeAt = 0L
     private val recoveryScheduled: Boolean get() = restoreAttemptGate.retryPending
     private val warnedTailscaleOrigins = mutableSetOf<String>()
     private val deviceStatusPoller by lazy {
@@ -217,7 +221,8 @@ class MainActivity : Activity() {
         savedInstanceState?.getInt(STATE_NEXT_FILE_CHOOSER_CODE)?.let(webFileChooserRequestCodes::restoreAtLeast)
         cleanupStaleDownloadFiles(cacheDir)
         configureEdgeToEdgeWindow(window)
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        window.setBackgroundDrawable(ColorDrawable(themeColor(R.color.app_background)))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
         nearbyPermissionLimited = preferences.getBoolean(PREFERENCE_NEARBY_PERMISSION_LIMITED, false)
         migrateLegacyDeviceSlots()
         val retainedHandoff = lastNonConfigurationInstance as? RetainedBridgeHandoff
@@ -316,6 +321,25 @@ class MainActivity : Activity() {
         webView?.onResume()
         window.decorView.requestApplyInsets()
         if (deviceListVisible && showingSetup) refreshDeviceStatuses(pairedDeviceStore.load())
+        probeAfterForegroundReturn()
+    }
+
+    /**
+     * A page that was rendered before the phone slept or lost Wi-Fi keeps showing stale content.
+     * One bounded liveness check restores trust and transport; the interval guard keeps repeated
+     * resumes from issuing a burst of requests.
+     */
+    private fun probeAfterForegroundReturn() {
+        if (isFinishing || isDestroyed || pendingConnection != null) return
+        if (webView == null || gatewayOrigin == null) return
+        if (failureDialog?.isShowing == true) return
+        val now = System.currentTimeMillis()
+        if (!ConnectionBackoff.shouldProbeOnForeground(lastForegroundProbeAt, now)) return
+        lastForegroundProbeAt = now
+        if (!canRecoverAutomatically()) return
+        if (recoveryScheduled) return
+        // A resumed page falls back to the mounted-page path so a live document is not reloaded.
+        if (!scheduleAutomaticRecovery()) return
     }
 
     override fun onPause() {
@@ -537,15 +561,13 @@ class MainActivity : Activity() {
             getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(focused.windowToken, 0)
         }
         val waiting = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(themeColor(R.color.app_background))
             isClickable = true
             isFocusableInTouchMode = true
             accessibilityPaneTitle = message
             // Receive unconsumed Insets before the real page while still drawing above it.
             translationZ = dp(1).toFloat()
         }
-        addSetupArtwork(waiting)
-        for (index in 0 until waiting.childCount) waiting.getChildAt(index).importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
@@ -555,7 +577,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             addView(ProgressBar(this@MainActivity).apply {
-                indeterminateTintList = ColorStateList.valueOf(getColor(R.color.app_accent))
+                indeterminateTintList = ColorStateList.valueOf(themeColor(R.color.app_accent))
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
             addView(spacer(16))
@@ -563,7 +585,7 @@ class MainActivity : Activity() {
                 text = message
                 textSize = 16f
                 gravity = Gravity.CENTER
-                setTextColor(getColor(R.color.app_secondary))
+                setTextColor(themeColor(R.color.app_secondary))
                 accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(spacer(24))
@@ -592,7 +614,7 @@ class MainActivity : Activity() {
         connectionWaitingView = waiting
         connectionFullWaitingView = waiting
         connectionFullCancelButton = connectionCancelButton
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
         attachConnectionWaitingView()
         return attempt
     }
@@ -662,7 +684,7 @@ class MainActivity : Activity() {
         connectionWaitingView = compact
         connectionCancelButton = cancel
         attachConnectionWaitingView()
-        applyStatusBarIconContrast(window, preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background)))
+        applyStatusBarIconContrast(window, preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background)))
     }
 
     /** A replacement document cannot inherit the outgoing document's visible-commit confirmation. */
@@ -673,7 +695,7 @@ class MainActivity : Activity() {
         connectionWaitingView = connectionFullWaitingView
         connectionCancelButton = connectionFullCancelButton
         attachConnectionWaitingView()
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
     }
 
     private fun setPageContent(root: View) {
@@ -693,8 +715,8 @@ class MainActivity : Activity() {
         connectionFullWaitingView = null
         connectionFullCancelButton = null
         connectionPageVisible = false
-        applyStatusBarIconContrast(window, if (webView == null) getColor(R.color.app_background)
-            else preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background)))
+        applyStatusBarIconContrast(window, if (webView == null) themeColor(R.color.app_background)
+            else preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background)))
     }
 
     private fun finishConnectionAttempt(attempt: ConnectionAttemptController.Attempt? = pendingConnection) {
@@ -833,7 +855,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(12), dp(8), dp(12))
-            background = roundedRipple(getColor(R.color.app_surface), 16)
+            background = roundedRipple(themeColor(R.color.app_surface), 16)
             isClickable = true
             isFocusable = true
             contentDescription = getString(R.string.open_paired_device, device.displayName)
@@ -843,20 +865,20 @@ class MainActivity : Activity() {
             text = device.displayName
             textSize = 17f
             setTypeface(Typeface.DEFAULT, Typeface.BOLD)
-            setTextColor(getColor(R.color.app_foreground))
+            setTextColor(themeColor(R.color.app_foreground))
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
         val address = TextView(this).apply {
             text = getString(R.string.paired_device_address, device.modeLabel(), device.origin.serialized)
             textSize = 12f
-            setTextColor(getColor(R.color.app_secondary))
+            setTextColor(themeColor(R.color.app_secondary))
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         val status = TextView(this).apply {
             textSize = 12f
-            setTextColor(getColor(R.color.app_secondary))
+            setTextColor(themeColor(R.color.app_secondary))
             deviceStatusViews[device.key] = this
             setDeviceStatusText(this, device)
         }
@@ -871,6 +893,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         row.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_chevron_right)
+            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_secondary))
             contentDescription = null
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(dp(32), dp(48)))
@@ -905,7 +928,7 @@ class MainActivity : Activity() {
         } else {
             status
         }
-        val color = getColor(if (device.status == PairedDeviceStatus.REACHABLE || current) R.color.app_success else R.color.app_secondary)
+        val color = themeColor(if (device.status == PairedDeviceStatus.REACHABLE || current) R.color.app_success else R.color.app_secondary)
         view.setTextColor(color)
         view.setCompoundDrawablesWithIntrinsicBounds(
             GradientDrawable().apply {
@@ -946,9 +969,10 @@ class MainActivity : Activity() {
     private fun refreshDeviceStatuses(devices: List<PairedDeviceRecord>) {
         deviceListRefreshRunnable?.let(deviceStatusHandler::removeCallbacks)
         deviceStatusPoller.refresh(devices)
+        val interval = ConnectionBackoff.deviceProbeTickMs(devices, System.currentTimeMillis())
         deviceListRefreshRunnable = Runnable {
             if (!isFinishing && !isDestroyed && deviceListVisible && showingSetup && pairedDeviceStore.load().isNotEmpty()) refreshDeviceStatuses(pairedDeviceStore.load())
-        }.also { deviceStatusHandler.postDelayed(it, DEVICE_STATUS_REFRESH_MS) }
+        }.also { deviceStatusHandler.postDelayed(it, interval) }
     }
 
     private fun applyDeviceStatusResult(device: PairedDeviceRecord, result: Result<NativeProbe>) {
@@ -1081,15 +1105,15 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(8), dp(8), dp(8))
-            background = roundedSurface(getColor(R.color.app_surface), 16).apply {
-                setStroke(dp(1), getColor(R.color.app_border))
+            background = roundedSurface(themeColor(R.color.app_surface), 16).apply {
+                setStroke(dp(1), themeColor(R.color.app_border))
             }
         }
         content.addView(
             TextView(this).apply {
                 text = getString(R.string.device_deleted, record.displayName)
                 textSize = 14f
-                setTextColor(getColor(R.color.app_foreground))
+                setTextColor(themeColor(R.color.app_foreground))
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
@@ -1101,15 +1125,15 @@ class MainActivity : Activity() {
         ).apply {
             isOutsideTouchable = true
             elevation = dp(8).toFloat()
-            setBackgroundDrawable(roundedSurface(getColor(R.color.app_surface), 16))
+            setBackgroundDrawable(roundedSurface(themeColor(R.color.app_surface), 16))
         }
         content.addView(Button(this).apply {
             setText(R.string.undo)
             isAllCaps = false
             minHeight = dp(48)
-            setTextColor(getColor(R.color.app_accent))
+            setTextColor(themeColor(R.color.app_accent))
             backgroundTintList = null
-            background = roundedRipple(getColor(R.color.app_surface), 12)
+            background = roundedRipple(themeColor(R.color.app_surface), 12)
             setOnClickListener {
                 if (withCredentialStorage { pairedDeviceStore.upsert(record) } == null) return@setOnClickListener
                 if (legacyCredential != null && withCredentialStorage {
@@ -1139,14 +1163,9 @@ class MainActivity : Activity() {
         deviceUndoPopup = null
     }
 
+    /** Launch behavior is the only App setting; the launcher icon is the fixed DSH mark. */
     private fun showDeviceListSettings() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.device_list_settings)
-            .setItems(arrayOf(getString(R.string.launch_settings), getString(R.string.icon_settings))) { _, which ->
-                if (which == 0) showLaunchSettings() else showIconSettings()
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        showLaunchSettings()
     }
 
     private fun showLaunchSettings() {
@@ -1163,63 +1182,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** Flip the launcher icon between the DSH whale mascot and the official whale marks. */
-    private fun iconComponent(icon: LauncherIconPolicy.Icon): ComponentName = ComponentName(
-        packageName,
-        LauncherIconPolicy.aliasClassName(MainActivity::class.java.name.substringBeforeLast('.'), icon),
-    )
-
-    private fun currentAppIcon(): String = LauncherIconPolicy.selectedKey(
-        preferences.getString(PREFERENCE_APP_ICON, null),
-    ) { packageManager.getComponentEnabledSetting(iconComponent(it)) }
-
-    private fun applyAppIcon(icon: String) {
-        val pm = packageManager
-        try {
-            LauncherIconPolicy.switchIcon(
-                key = icon,
-                atomic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-                readState = { pm.getComponentEnabledSetting(iconComponent(it)) },
-            ) { changes ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    pm.setComponentEnabledSettings(changes.map {
-                        PackageManager.ComponentEnabledSetting(iconComponent(it.icon), it.state, PackageManager.DONT_KILL_APP)
-                    })
-                } else {
-                    changes.forEach {
-                        pm.setComponentEnabledSetting(iconComponent(it.icon), it.state, PackageManager.DONT_KILL_APP)
-                    }
-                }
-            }
-            preferences.edit().putString(PREFERENCE_APP_ICON, icon).apply()
-            deviceListStatus?.setText(R.string.icon_settings_saved)
-        } catch (error: Exception) {
-            // Package-manager failure is reported without persisting an unconfirmed selection.
-            Toast.makeText(this, R.string.icon_settings_failed, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun showIconSettings() {
-        val keys = LauncherIconPolicy.icons.map { it.key }
-        val labels = arrayOf(
-            getString(R.string.icon_choice_whale_girl),
-            getString(R.string.icon_choice_official_whale),
-            getString(R.string.icon_choice_official_whale_dark),
-            getString(R.string.icon_choice_official_whale_teal),
-            getString(R.string.icon_choice_official_whale_mono),
-            getString(R.string.icon_choice_official_whale_black),
-            getString(R.string.icon_choice_official_whale_white),
-        )
-        val selected = keys.indexOf(currentAppIcon()).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle(R.string.icon_settings)
-            .setSingleChoiceItems(labels, selected) { dialog, which ->
-                dialog.dismiss()
-                applyAppIcon(keys[which])
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
     private fun connectPairedDevice(snapshot: PairedDeviceRecord) {
         if (!prepareCredentialStorage()) return
         val device = pairedDeviceStore.load().firstOrNull { it.key == snapshot.key } ?: return
@@ -1307,7 +1269,7 @@ class MainActivity : Activity() {
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(18))
-            background = roundedRipple(getColor(R.color.app_surface), 18)
+            background = roundedRipple(themeColor(R.color.app_surface), 18)
             isClickable = true
             isFocusable = true
             contentDescription = getString(titleResource)
@@ -1375,14 +1337,14 @@ class MainActivity : Activity() {
         val discovery = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedSurface(getColor(R.color.app_surface_translucent), 20).apply {
-                setStroke(dp(1), getColor(R.color.app_border))
+            background = roundedSurface(themeColor(R.color.app_surface_translucent), 20).apply {
+                setStroke(dp(1), themeColor(R.color.app_border))
             }
         }
 
         val status = TextView(this).apply {
             setText(R.string.scan_prompt)
-            setTextColor(getColor(R.color.app_secondary))
+            setTextColor(themeColor(R.color.app_secondary))
             textSize = 15f
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
@@ -1443,8 +1405,8 @@ class MainActivity : Activity() {
         val remote = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedSurface(getColor(R.color.app_surface_translucent), 20).apply {
-                setStroke(dp(1), getColor(R.color.app_border))
+            background = roundedSurface(themeColor(R.color.app_surface_translucent), 20).apply {
+                setStroke(dp(1), themeColor(R.color.app_border))
             }
         }
         remote.addView(textView(R.string.remote_step_one, 15f, Typeface.BOLD))
@@ -1454,7 +1416,7 @@ class MainActivity : Activity() {
         remote.addView(primaryButton(R.string.scan_remote_qr, 56) { openScanner() })
         remote.addView(spacer(18))
         val status = TextView(this).apply {
-            setTextColor(getColor(R.color.app_secondary))
+            setTextColor(themeColor(R.color.app_secondary))
             textSize = 14f
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -1484,7 +1446,7 @@ class MainActivity : Activity() {
         val connection = GatewayConnection.parse(raw.trim())
         if (connection == null || !isRemoteTunnelHost(connection.origin.host)
             || GatewayUrlPolicy.pairingKey(raw.trim()) == null) {
-            status.setTextColor(getColor(R.color.app_error))
+            status.setTextColor(themeColor(R.color.app_error))
             status.setText(R.string.invalid_remote_link)
             status.visibility = View.VISIBLE
             return
@@ -1510,11 +1472,10 @@ class MainActivity : Activity() {
         showingSetup = false
         setupBackAction = null
         destroyWebView()
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(themeColor(R.color.app_background))
         }
-        addSetupArtwork(root)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -1545,7 +1506,7 @@ class MainActivity : Activity() {
         card.addView(TextView(this).apply {
             text = "${harness.deviceName}\n${harness.origin.serialized}"
             textSize = 16f
-            setTextColor(getColor(R.color.app_foreground))
+            setTextColor(themeColor(R.color.app_foreground))
             setTextIsSelectable(true)
         })
         card.addView(spacer(24))
@@ -1563,7 +1524,7 @@ class MainActivity : Activity() {
         card.addView(pairing, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         card.addView(spacer(20))
         val status = TextView(this).apply {
-            setTextColor(getColor(R.color.app_error))
+            setTextColor(themeColor(R.color.app_error))
             textSize = 14f
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -1588,11 +1549,10 @@ class MainActivity : Activity() {
     }
 
     private fun createSetupCard(surface: Boolean = true): LinearLayout {
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(themeColor(R.color.app_background))
         }
-        addSetupArtwork(root)
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
@@ -1610,8 +1570,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             if (surface) {
                 setPadding(dp(24), dp(24), dp(24), dp(24))
-                background = roundedSurface(getColor(R.color.app_surface), 20).apply {
-                    setStroke(dp(1), getColor(R.color.app_border))
+                background = roundedSurface(themeColor(R.color.app_surface), 20).apply {
+                    setStroke(dp(1), themeColor(R.color.app_border))
                 }
             }
         }
@@ -1638,26 +1598,11 @@ class MainActivity : Activity() {
         return card
     }
 
-    /** Pre-connection artwork: covers the whole screen (edges may crop), under a theme-aware scrim. */
-    private fun addSetupArtwork(root: FrameLayout) {
-        root.addView(
-            ImageView(this).apply {
-                setImageResource(R.drawable.setup_background_image)
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-        root.addView(
-            View(this).apply { setBackgroundColor(getColor(R.color.app_setup_scrim)) },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-    }
-
     /** Reconnect to a manually entered origin, falling back to pairing when unknown. */
     private fun connectManual(raw: String, status: TextView) {
         val origin = parseManualOrigin(raw)
         if (origin == null) {
-            status.setTextColor(getColor(R.color.app_error))
+            status.setTextColor(themeColor(R.color.app_error))
             status.setText(R.string.invalid_gateway)
             status.visibility = View.VISIBLE
             return
@@ -1719,14 +1664,14 @@ class MainActivity : Activity() {
         warnIfTailscale(origin)
         val generation = beginPairingAttempt() ?: return
         button.isEnabled = false
-        status.setTextColor(getColor(R.color.app_secondary))
+        status.setTextColor(themeColor(R.color.app_secondary))
         status.setText(R.string.pairing_in_progress)
         status.visibility = View.VISIBLE
         val mode = accessMode
         val store = credentialStore(mode)
         val attempt = startConnectionAttempt(mode, getString(R.string.pairing_in_progress), onCancelled = { reason ->
             button.isEnabled = true
-            status.setTextColor(getColor(R.color.app_secondary))
+            status.setTextColor(themeColor(R.color.app_secondary))
             status.setText(if (reason == ConnectionAttemptController.Reason.TIMED_OUT) R.string.connection_timed_out else R.string.connection_cancelled)
         })
         ioExecutor.execute {
@@ -1763,7 +1708,7 @@ class MainActivity : Activity() {
             if (trustFailure != null) {
                 runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(pairingFailureMessage(trustFailure, origin))
                     completePairingAttempt(generation)
                     button.isEnabled = true
@@ -1774,7 +1719,7 @@ class MainActivity : Activity() {
             if (trust == null) {
                 runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(R.string.pairing_tls_failed)
                     completePairingAttempt(generation)
                     button.isEnabled = true
@@ -1811,7 +1756,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (generation != pairingGeneration) return@runOnUiThread
                         if (renewed.instanceId != existingCredential.instanceId) {
-                            status.setTextColor(getColor(R.color.app_error))
+                            status.setTextColor(themeColor(R.color.app_error))
                             status.setText(R.string.pairing_failed)
                             completePairingAttempt(generation)
                             button.isEnabled = true
@@ -1838,7 +1783,7 @@ class MainActivity : Activity() {
                 if (!ConnectionRestorePolicy.mayPairAfterRenewFailure(renewalFailure)) {
                     runOnUiThread {
                         if (generation != pairingGeneration) return@runOnUiThread
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(pairingFailureMessage(renewalFailure, origin))
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1850,7 +1795,7 @@ class MainActivity : Activity() {
                 } catch (_: CredentialStorageUnavailable) {
                     runOnUiThread {
                         if (generation != pairingGeneration) return@runOnUiThread
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(R.string.device_storage_unavailable)
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1866,7 +1811,7 @@ class MainActivity : Activity() {
                     val expiresAt = session.deviceExpiresAt
                     if (deviceToken == null || expiresAt == null
                         || (expectedInstanceId != null && session.instanceId != expectedInstanceId)) {
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(R.string.pairing_failed)
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1876,7 +1821,7 @@ class MainActivity : Activity() {
                                 store.save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
                             }
                         }.isSuccess) {
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(R.string.device_storage_unavailable)
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1911,7 +1856,7 @@ class MainActivity : Activity() {
                 } }
                 .onFailure { error -> runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(pairingFailureMessage(error, origin))
                     completePairingAttempt(generation)
                     button.isEnabled = true
@@ -1921,7 +1866,7 @@ class MainActivity : Activity() {
 
     private fun showCompatibilityIssue(issue: CompatibilityIssue, status: TextView, button: Button) {
         button.isEnabled = true
-        status.setTextColor(getColor(R.color.app_error))
+        status.setTextColor(themeColor(R.color.app_error))
         val required = issue.requiredVersion.orEmpty()
         val (title, message) = when (issue.kind) {
             CompatibilityIssueKind.APP_TOO_OLD -> R.string.app_update_required_title to getString(R.string.app_update_required_message, required)
@@ -1971,13 +1916,13 @@ class MainActivity : Activity() {
         val scanCancellation = AtomicBoolean(false)
         scanCanceled = scanCancellation
         results.removeAllViews()
-        status.setTextColor(getColor(R.color.app_secondary))
+        status.setTextColor(themeColor(R.color.app_secondary))
         status.setText(if (nearbyPermissionLimited) R.string.scanning_lan_limited else R.string.scanning_lan)
         status.visibility = View.VISIBLE
         val attempt = startConnectionAttempt(AccessMode.LAN, status.text, onCancelled = { reason ->
             button.isEnabled = true
             results.removeAllViews()
-            status.setTextColor(getColor(R.color.app_secondary))
+            status.setTextColor(themeColor(R.color.app_secondary))
             status.setText(if (reason == ConnectionAttemptController.Reason.TIMED_OUT) R.string.connection_timed_out else R.string.scan_prompt)
         })
 
@@ -1987,8 +1932,8 @@ class MainActivity : Activity() {
             textSize = 15f
             minHeight = dp(48)
             backgroundTintList = null
-            background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
-            setTextColor(getColor(R.color.app_foreground))
+            background = roundedRipple(themeColor(R.color.app_surface_tinted), 12)
+            setTextColor(themeColor(R.color.app_foreground))
         }
         cancelButton.setOnClickListener {
             connectionAttempts.cancel(attempt)
@@ -2005,13 +1950,13 @@ class MainActivity : Activity() {
                 cancelButton.isEnabled = true
                 cancelButton.visibility = View.GONE
                 if (scanCancellation.get()) {
-                    status.setTextColor(getColor(R.color.app_secondary))
+                    status.setTextColor(themeColor(R.color.app_secondary))
                     status.setText(R.string.scan_prompt)
                 } else if (found.isEmpty()) {
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(R.string.no_harness_found)
                 } else {
-                    status.setTextColor(getColor(R.color.app_secondary))
+                    status.setTextColor(themeColor(R.color.app_secondary))
                     status.text = resources.getQuantityString(R.plurals.harnesses_found, found.size, found.size)
                     found.forEachIndexed { index, harness ->
                         if (index > 0) results.addView(spacer(8))
@@ -2028,9 +1973,9 @@ class MainActivity : Activity() {
                             gravity = Gravity.START or Gravity.CENTER_VERTICAL
                             minHeight = dp(68)
                             textSize = 15f
-                            setTextColor(getColor(R.color.app_foreground))
+                            setTextColor(themeColor(R.color.app_foreground))
                             backgroundTintList = null
-                            background = roundedRipple(getColor(R.color.app_surface_tinted), 16)
+                            background = roundedRipple(themeColor(R.color.app_surface_tinted), 16)
                             contentDescription = getString(
                                 if (trusted) R.string.open_harness_trusted else R.string.open_harness_pairing,
                                 harness.deviceName,
@@ -2304,9 +2249,9 @@ class MainActivity : Activity() {
 
     private fun scheduleAutomaticRecovery(): Boolean {
         if (recoveryScheduled) return true
-        if (recoveryAttempt >= RECOVERY_DELAYS_MS.size || !canRecoverAutomatically()) return false
+        if (recoveryAttempt >= ConnectionBackoff.RECOVERY_DELAYS || !canRecoverAutomatically()) return false
         if (pendingConnection == null) startConnectionAttempt(accessMode, preserveBrowser = webView)
-        val delay = RECOVERY_DELAYS_MS[recoveryAttempt++]
+        val delay = ConnectionBackoff.recoveryDelay(recoveryAttempt++)
         recoveryHandler.postDelayed(restoreAttemptGate.retryCallback {
             if (!isFinishing && !isDestroyed) recoverAutomatically()
         }, delay)
@@ -2335,6 +2280,11 @@ class MainActivity : Activity() {
                 ExhaustedRecoveryAction.IGNORE -> Unit
                 ExhaustedRecoveryAction.KEEP_PAGE -> {
                     finishConnectionAttempt()
+                    // A retained page only keeps its budget while it still answers; a later failure
+                    // starts a fresh backoff window instead of inheriting an exhausted one.
+                    recoveryAttempt = 0
+                    restoreAttemptGate.cancelRetry()
+                    if (scheduleAutomaticRecovery()) return@probeMountedDshPage
                     showLoadFailure(LoadFailure.NETWORK)
                 }
                 ExhaustedRecoveryAction.SHOW_CONNECTIONS -> fallback()
@@ -2614,7 +2564,7 @@ class MainActivity : Activity() {
             showDeviceList()
             deviceListStatus?.apply {
                 setText(R.string.webview_renderer_failed)
-                setTextColor(getColor(R.color.app_error))
+                setTextColor(themeColor(R.color.app_error))
             }
             return
         }
@@ -2683,9 +2633,9 @@ class MainActivity : Activity() {
 
         // Every DSH page and third-party overlay shares the native safe viewport.
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(themeColor(R.color.app_background))
         }
-        val initialChromeColor = preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background))
+        val initialChromeColor = preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background))
         root.setBackgroundColor(initialChromeColor)
         applyStatusBarIconContrast(window, initialChromeColor)
         val statusBarBackdrop = View(this).apply {
@@ -2697,7 +2647,7 @@ class MainActivity : Activity() {
         webView = browser
         loadingConnectionAttempt = pendingConnection
         recoveryStoppedBrowser = null
-        browser.setBackgroundColor(getColor(R.color.app_background))
+        browser.setBackgroundColor(themeColor(R.color.app_background))
         browser.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -2792,6 +2742,9 @@ class MainActivity : Activity() {
                 if (ownsBrowser()) {
                     displayScale.onDocumentReady()
                     retryUrl = origin.serialized
+                    // A committed page proves the transport recovered: the next outage restarts the
+                    // backoff window at its first delay instead of using up an earlier budget.
+                    cancelAutomaticRecovery()
                     CookieManager.getInstance().flush()
                     nativeBridge?.injectPage()
                     secureWebViewClient?.currentDocumentGeneration?.let(::inspectVisibleContent)
@@ -2852,6 +2805,7 @@ class MainActivity : Activity() {
                 if (connectionWaitingView == null || connectionPageVisible) applyStatusBarIconContrast(window, color)
                 preferences.edit().putInt(PREFERENCE_WEB_CHROME_COLOR, color).apply()
             }
+            bridge.onPageTheme = { palette -> DshNativeTheme.store(preferences, palette) }
             bridge.onDeviceRevoked = ::handleDeviceRevoked
             bridge.onSwitchComputer = ::showDeviceList
             bridge.onOpenTaskNotificationSettings = ::openTaskNotificationSettings
@@ -3246,13 +3200,13 @@ class MainActivity : Activity() {
         setText(textResource)
         textSize = sizeSp
         setTypeface(Typeface.DEFAULT, style)
-        setTextColor(getColor(colorResource))
+        setTextColor(themeColor(colorResource))
     }
 
     private fun toolbarIconButton(iconResource: Int, labelResource: Int): ImageButton = ImageButton(this).apply {
         setImageResource(iconResource)
         contentDescription = getString(labelResource)
-        setColorFilter(getColor(R.color.app_foreground))
+        setColorFilter(themeColor(R.color.app_foreground))
         scaleType = ImageView.ScaleType.CENTER
         setPadding(dp(8), dp(8), dp(8), dp(8))
         val selectable = TypedValue()
@@ -3268,8 +3222,8 @@ class MainActivity : Activity() {
         setTypeface(Typeface.DEFAULT, Typeface.BOLD)
         minHeight = dp(minHeightDp)
         backgroundTintList = null
-        background = roundedRipple(getColor(R.color.app_accent), 16)
-        setTextColor(getColor(R.color.app_on_accent))
+        background = roundedRipple(themeColor(R.color.app_accent), 16)
+        setTextColor(themeColor(R.color.app_on_accent))
         setOnClickListener { onClick() }
     }
 
@@ -3279,9 +3233,9 @@ class MainActivity : Activity() {
         isAllCaps = false
         textSize = 15f
         minHeight = dp(minHeightDp)
-        setTextColor(getColor(R.color.app_foreground))
+        setTextColor(themeColor(R.color.app_foreground))
         backgroundTintList = null
-        background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
+        background = roundedRipple(themeColor(R.color.app_surface_tinted), 12)
         setOnClickListener { onClick() }
     }
 
@@ -3300,7 +3254,7 @@ class MainActivity : Activity() {
         minHeight = dp(minHeightDp)
         textSize = 16f
         setPadding(dp(16), 0, dp(16), 0)
-        background = roundedSurface(getColor(R.color.app_surface_tinted), 12)
+        background = roundedSurface(themeColor(R.color.app_surface_tinted), 12)
         this.contentDescription = getString(contentDescriptionResource)
     }
 
@@ -3312,7 +3266,7 @@ class MainActivity : Activity() {
     private fun roundedRipple(color: Int, radiusDp: Int): RippleDrawable {
         val content = roundedSurface(color, radiusDp)
         return RippleDrawable(
-            ColorStateList.valueOf(getColor(R.color.app_border)),
+            ColorStateList.valueOf(themeColor(R.color.app_border)),
             content,
             null,
         )
@@ -3367,7 +3321,6 @@ class MainActivity : Activity() {
         const val PREFERENCE_NEARBY_PERMISSION_LIMITED = "nearby_permission_limited"
         const val PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
         const val PREFERENCE_WEB_CHROME_COLOR = "web_chrome_color"
-        const val PREFERENCE_APP_ICON = "app_icon"
         const val STATE_SHOWING_SETUP = "showing_setup"
         const val STATE_ACCESS_MODE = "access_mode"
         const val STATE_NATIVE_BRIDGE = "native_bridge"
@@ -3384,7 +3337,6 @@ class MainActivity : Activity() {
         const val TASK_NOTIFICATION_PERMISSION_REQUEST = 4105
         const val SCAN_QR_REQUEST = 4106
         const val VOICE_PERMISSION_REQUEST = 4107
-        const val DEVICE_STATUS_REFRESH_MS = 20_000L
         const val DEVICE_UNDO_TIMEOUT_MS = 6_000L
         const val LIVE_DOCUMENT_PROBE_TIMEOUT_MS = 2_000L
         const val MOBILE_BACK_TIMEOUT_MS = 1_500L
@@ -3392,7 +3344,6 @@ class MainActivity : Activity() {
         const val LAN_CONNECTION_BUDGET_MS = 30_000L
         const val REMOTE_CONNECTION_BUDGET_MS = 60_000L
         const val APP_RELEASES_URL = "https://github.com/saya-ch/dsh-mobile/releases/latest"
-        val RECOVERY_DELAYS_MS = longArrayOf(0L, 1_000L, 3_000L, 8_000L)
         val MIME_TYPE = Regex("^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+*-]+$")
         val UNSAFE_FILENAME = Regex("[\\\\/:*?\"<>|\\p{Cc}]")
     }

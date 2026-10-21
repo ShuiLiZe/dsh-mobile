@@ -4,6 +4,7 @@ import { lstat, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { basename, dirname, extname, join } from 'node:path'
 import {
+  Agent as HttpAgent,
   STATUS_CODES,
   createServer as createHttpServer,
   request as requestHttp,
@@ -138,6 +139,11 @@ const MOBILE_BOOT_SIZE_PROBE_HEADER = 'x-dsh-mobile-size-probe'
 const MAX_MOBILE_BOOT_BATCHES = 8
 const MOBILE_BOOT_UPSTREAM_ATTEMPTS = 4
 const MOBILE_BOOT_RETRY_DELAY_MS = 150
+/** Window a pooled loopback socket to DSH may stay idle before it is closed. */
+const UPSTREAM_KEEP_ALIVE_TIMEOUT_MS = 5_000
+/** One phone boot fans out far fewer concurrent reads than this. */
+const UPSTREAM_KEEP_ALIVE_MAX_SOCKETS = 16
+const UPSTREAM_KEEP_ALIVE_MAX_FREE_SOCKETS = 8
 
 function upstreamPluginBundleUrl(source: string, upstreamOrigin: URL): URL | undefined {
   if ((!source.startsWith('/plugins/') && !source.startsWith('plugins/')) || source.includes('#')) return undefined
@@ -1156,6 +1162,8 @@ export class MobileAccessGateway {
   private pairingCaCertificate: string | undefined
   private listenerPort: number | undefined
   private readonly connectedSockets = new Set<Socket>()
+  /** Keep-alive pool for small bodyless reads on the loopback hop to DSH. */
+  private upstreamAgent: HttpAgent | undefined
   private readonly activeRequests = new Map<number, ActiveRequest>()
   private readonly activeWebSockets = new Map<number, ActiveWebSocket>()
   private readonly mobileBootBatches = new Map<string, StoredMobileBootBatch>()
@@ -2894,6 +2902,35 @@ export class MobileAccessGateway {
     }
   }
 
+  /**
+   * Pool the loopback hop to DSH for small, bodyless reads (revisioned plugin
+   * bundles, boot-batch entries, hashed asset chunks). A phone opening one page
+   * asks for dozens of these, and every `agent: false` request paid its own TCP
+   * connect plus a fresh upstream accept. Bodies stream or upload, and API
+   * requests may legitimately sit unanswered for minutes, so those keep a
+   * dedicated connection: a pooled socket silently replayed on a retry could
+   * carry a partially read response, and recycling an idle streaming socket
+   * would break clients mid-read.
+   */
+  private upstreamAgentFor(request: IncomingMessage, replayable: boolean): HttpAgent | boolean {
+    // `false` keeps Node's per-request agent (one connection, closed after use).
+    // Passing `undefined` here would fall back to the process-wide global agent
+    // and silently pool every API hop too, so this must never return undefined.
+    if (!replayable) return false
+    if (request.headers.range !== undefined) return false
+    const url = request.url ?? '/'
+    if (url.includes('token=')) return false
+    const pathname = parseRequestTarget(url).decodedPathname
+    if (pathname !== '/plugins' && !pathname.startsWith('/plugins/')
+      && pathname !== '/assets' && !pathname.startsWith('/assets/')) return false
+    return this.upstreamAgent ??= new HttpAgent({
+      keepAlive: true,
+      maxSockets: UPSTREAM_KEEP_ALIVE_MAX_SOCKETS,
+      maxFreeSockets: UPSTREAM_KEEP_ALIVE_MAX_FREE_SOCKETS,
+      timeout: UPSTREAM_KEEP_ALIVE_TIMEOUT_MS,
+    })
+  }
+
   private async proxyHttpOnce(
     request: IncomingMessage,
     response: ServerResponse,
@@ -2920,7 +2957,7 @@ export class MobileAccessGateway {
           method: request.method,
           path: request.url,
           headers: upstreamHeaders,
-          agent: false,
+          agent: this.upstreamAgentFor(request, replayable),
         })
         holder.request = upstreamRequest
         upstreamRequest.setTimeout(this.config.upstreamTimeoutMs, () => {
@@ -2976,10 +3013,18 @@ export class MobileAccessGateway {
         addVaryAcceptEncoding(headers)
       }
       response.writeHead(statusCode, headers)
-      await Promise.all([
-        bodyDone,
-        compressed && request.method !== 'HEAD' ? pipeline(proxied, createGzip(), response) : pipeline(proxied, response),
-      ])
+      try {
+        await Promise.all([
+          bodyDone,
+          compressed && request.method !== 'HEAD' ? pipeline(proxied, createGzip(), response) : pipeline(proxied, response),
+        ])
+      } catch (error) {
+        // Headers already reached the phone, so this attempt cannot retry. A
+        // pooled upstream socket must never go back to the keep-alive pool with
+        // unread bytes on it: destroy it and let the next request open a fresh one.
+        proxied.destroy()
+        throw error
+      }
     } catch (error) {
       holder.request?.destroy()
       await bodyDone?.catch(() => undefined)
@@ -3421,6 +3466,9 @@ export class MobileAccessGateway {
       websocket.upstream.destroy()
     }
     for (const socket of this.connectedSockets) socket.destroy()
+    // Stopping the gateway leaves nothing open toward DSH, pooled idle sockets included.
+    this.upstreamAgent?.destroy()
+    this.upstreamAgent = undefined
     if (this.discoveryTimer !== undefined) clearInterval(this.discoveryTimer)
     this.discoveryTimer = undefined
     await this.closeBonjour()
