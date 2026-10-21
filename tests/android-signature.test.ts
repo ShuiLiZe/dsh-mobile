@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const verifier = fileURLToPath(new URL('../scripts/verify-android-signature.mjs', import.meta.url))
-const digest = 'f46bbee7dbe47d18f49f95f940e1d368f0b79bd8ad9d15d488337fba51e92e87'
+const digest = '1a3441ad8cb4791a1c0da07b8ae0aea60b31e4961f6304a0600eedb81cd34ff8'
 const certificate = (label: string, value = digest): string => `${label} certificate SHA-256 digest: ${value}`
 const report = (...certificates: string[]): string => ['Verifies', 'Number of signers: 1', ...certificates].join('\n')
 
