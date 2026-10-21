@@ -37,7 +37,11 @@ describe('self-hosted reverse proxy settings', () => {
     expect(() => parseOriginSettings({ ...input, publicOrigin })).toThrow('origin_public_origin_invalid')
   })
 
-  it.each(['0.0.0.0', '1.1.1.1', '100.64.0.2', '169.254.1.2', 'localhost', '::1', '::ffff:127.0.0.1', '192.168.001.2'])('rejects unsafe listen host %s', listenHost => {
+  it.each([
+    '0.0.0.0', '1.1.1.1', '100.64.0.2', '169.254.1.2', 'localhost', '192.168.001.2',
+    '::', '2001:4860:4860::8888', '2001:db8::1', 'fe80::1', 'ff02::1', '[::1]',
+    '::1%eth0', 'fd12:3456::1%eth0', '::ffff:127.0.0.1', '::ffff:7f00:1',
+  ])('rejects unsafe listen host %s', listenHost => {
     expect(() => parseOriginSettings({ ...input, listenHost })).toThrow('origin_listen_host_invalid')
   })
 
@@ -80,6 +84,42 @@ describe('self-hosted reverse proxy settings', () => {
     for (const value of [null, [], 1, { ...input, version: 2 }, { ...input, token: 'not-supported' }]) {
       expect(() => parseOriginSettings(value)).toThrow('origin_settings_invalid')
     }
+  })
+
+  it('accepts explicit IPv6 loopback and ULA while retaining the IPv4 defaults', () => {
+    expect(parseOriginSettings({ ...input, listenHost: '0:0:0:0:0:0:0:1' })).toMatchObject({
+      listenHost: '::1', allowedCidrs: ['::1/128'],
+    })
+    const allowedCidrs = ['fd12:3456::2/128', 'fc00::/7', '::1/128']
+    expect(parseOriginSettings({ ...input, listenHost: 'FD12:3456:0:0:0:0:0:1', allowedCidrs })).toMatchObject({
+      listenHost: 'fd12:3456::1', allowedCidrs,
+    })
+    expect(parseOriginSettings(input).allowedCidrs).toEqual(['127.0.0.0/8'])
+    expect(() => parseOriginSettings({ ...input, listenHost: 'fd12:3456::1' })).toThrow('origin_allowed_cidrs_invalid')
+    expect(() => parseOriginSettings({ ...input, listenHost: 'fd12:3456::1', allowedCidrs: ['::1/128'] }))
+      .toThrow('origin_allowed_cidrs_invalid')
+  })
+
+  it.each([
+    '::/0', '::/1', '::/127', 'fc00::/6', 'fe80::/10', 'ff00::/8', '2001:4860:4860::8888/128',
+    '2001:db8::/32', 'fd12:3456::2/64', 'fd12:3456::2%eth0/128', '::1%lo/128',
+    '::ffff:127.0.0.1/32', '::ffff:7f00:1/128', '127.0.0.1/32',
+  ])('rejects unsafe or mismatched IPv6 proxy source %s', cidr => {
+    expect(() => parseOriginSettings({ ...input, listenHost: '::1', allowedCidrs: [cidr] }))
+      .toThrow('origin_allowed_cidrs_invalid')
+  })
+
+  it('persists IPv6 settings and formats a usable bracketed backend URL', async () => {
+    const { store } = await fixture()
+    await store.initialize()
+    await store.configure({ ...input, listenHost: '::1' })
+    expect(store.status()).toMatchObject({ backendOrigin: 'http://[::1]:3444', allowedCidrs: ['::1/128'] })
+    const restored = new OriginConfigStore(store.stateRoot)
+    await restored.initialize()
+    expect(restored.settings()).toEqual(store.settings())
+    expect(new URL(restored.status().backendOrigin!).hostname).toBe('[::1]')
+    await restored.configure({ ...input, listenHost: 'fd12:3456::1', allowedCidrs: ['fd12:3456::2/128'] })
+    expect(restored.status().backendOrigin).toBe('http://[fd12:3456::1]:3444')
   })
 
   it('round-trips private settings and purges only its own file', async () => {

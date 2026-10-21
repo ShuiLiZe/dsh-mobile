@@ -546,7 +546,7 @@ export function syncHistoryLoaderLabel(
 
 /**
  * Maximum gap between input or scrolling events before an unused loading intent expires.
- * A held finger may re-arm on its next owned move; an undelivered touch end cannot keep the lease alive.
+ * A held pending intent expires without loading; a fresh gesture can create another intent.
  */
 export const HISTORY_SCROLL_QUIET_MS = 1600
 
@@ -582,13 +582,13 @@ export interface HistoryIntentEvent {
 }
 
 export interface HistoryAutoLoadGate {
-  /** One listener for every `HISTORY_INTENT_EVENTS` type. */
+  /** Process input and scrolling events belonging to the bound conversation scroller. */
   readonly handleEvent: (event: HistoryIntentEvent) => void
   /** Session switch or rebind: disarm and clear the quiet timer. */
   readonly reset: (top: number) => void
   /** Clear the quiet timer only; the binder owns listener add/remove. */
   readonly dispose: () => void
-  readonly state: () => { armed: boolean; previousTop: number }
+  readonly state: () => { armed: boolean; previousTop: number; pendingIntent: boolean }
 }
 
 export interface HistoryGateIdentityInput {
@@ -625,9 +625,21 @@ export function resolveHistoryGateIdentity(input: HistoryGateIdentityInput): His
  * that compensation as another upward fling, clicked "Load earlier" again, and shook
  * the view in a chain. Only fresh input arms the gate, one arm buys at most one
  * successful load, and an arm with no further input expires quietly.
+ *
+ * A touch-driven eligible scroll never clicks while the gesture is live: DSH retains
+ * a paging anchor while a page loads, and its preservation writes fight a drag still
+ * in progress. The gate records a pending intent instead and spends it only once the
+ * gesture settles — a `scrollend` after every owned contact ends, or the quiet lease
+ * expiring with no contact listed — and only while the reader still holds the top
+ * zone. The intent dies with its arm: it is never spendable after the arm ends, and
+ * the lease re-anchors ownership instead of clicking under a listed finger. Wheel
+ * input outside a touch gesture keeps the immediate click: a wheel flick has no held
+ * gesture to fight.
  */
 export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryAutoLoadGate {
   let armed = false
+  let armedByWheel = false
+  let pendingIntent = false
   const touchIds = new Set<number>()
   let disposed = false
   let previousTop = hooks.getTop()
@@ -640,10 +652,36 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
     hooks.cancel(quietId)
     quietId = undefined
   }
+  /**
+   * Spend a pending loading intent only after every owned contact ends in the top zone.
+   * @returns whether a load was issued.
+   */
+  const settle = (): boolean => {
+    if (!pendingIntent || touchIds.size > 0) return false
+    if (hooks.getTop() > AUTO_HISTORY_THRESHOLD_PX) {
+      // The reader left the zone before settling; the intent is stale.
+      pendingIntent = false
+      return false
+    }
+    if (!hooks.tryLoad()) return false
+    pendingIntent = false
+    return true
+  }
   const onQuiet = (): void => {
     quietPending = false
     quietId = undefined
+    if (touchIds.size > 0) {
+      // A listed contact keeps the gesture open: never click under a finger. An
+      // intent held by the lease dies here, and its ownership is re-anchored, so
+      // an undelivered touch end cannot poison later settles.
+      if (pendingIntent) touchIds.clear()
+      pendingIntent = false
+      armed = false
+      return
+    }
+    settle()
     armed = false
+    pendingIntent = false
   }
   const restartQuiet = (): void => {
     cancelQuiet()
@@ -651,8 +689,9 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
     quietPending = true
     quietId = hooks.schedule(onQuiet, HISTORY_SCROLL_QUIET_MS)
   }
-  const arm = (): void => {
+  const arm = (byWheel: boolean): void => {
     armed = true
+    armedByWheel = byWheel
     restartQuiet()
   }
   const onScroll = (): void => {
@@ -661,12 +700,20 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
     // Track the top while disarmed too: a script-driven write is a fact about the
     // viewport, and hiding it would let the next drag look like a longer upward move.
     previousTop = top
-    // A refused click leaves the arm unspent, so the loader can still be reached
-    // inside the same gesture once DSH enables the button.
-    if (eligible && hooks.tryLoad()) {
-      armed = false
-      cancelQuiet()
-      return
+    if (eligible) {
+      if (armedByWheel) {
+        // A wheel flick has no held gesture to fight DSH's paging anchor.
+        // A refused click leaves the arm unspent for the loader's next enablement.
+        if (hooks.tryLoad()) {
+          armed = false
+          pendingIntent = false
+          cancelQuiet()
+          return
+        }
+      } else {
+        // A touch drag records its intent; the click waits for the settle.
+        pendingIntent = true
+      }
     }
     // Momentum keeps the scroller emitting `scroll` after the fingers lift. Every
     // one is the gesture still unfolding, so it restarts the quiet window while
@@ -678,15 +725,23 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
     handleEvent: event => {
       if (disposed) return
       switch (event.type) {
-        case 'touchstart':
-          for (const touch of Array.from(event.changedTouches ?? [])) touchIds.add(touch.identifier)
-          if ((event.changedTouches?.length ?? 0) > 0) arm()
+        case 'touchstart': {
+          const changed = Array.from(event.changedTouches ?? [])
+          if (changed.length === 0) break
+          // A new gesture cannot spend an intent left by a previously refused load.
+          if (touchIds.size === 0) pendingIntent = false
+          for (const touch of changed) touchIds.add(touch.identifier)
+          arm(false)
           break
+        }
         case 'touchmove':
-          if (Array.from(event.changedTouches ?? []).some(touch => touchIds.has(touch.identifier))) arm()
+          if (Array.from(event.changedTouches ?? []).some(touch => touchIds.has(touch.identifier))) arm(false)
           break
         case 'wheel':
-          arm()
+          // A listed contact keeps wheel input on the deferred path even after
+          // an unused arm expires. Contact-free wheel input still loads immediately.
+          if (touchIds.size === 0) pendingIntent = false
+          arm(touchIds.size === 0)
           break
         case 'touchend':
         case 'touchcancel': {
@@ -697,10 +752,22 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
           if (endedOwnedTouch) restartQuiet()
           break
         }
-        case 'scrollend':
+        case 'scrollend': {
+          if (pendingIntent && settle()) {
+            armed = false
+            cancelQuiet()
+            break
+          }
+          if (pendingIntent) {
+            // A live contact still owns the gesture, or the loader refused the
+            // click: the intent waits for the next settle. The lease bounds the wait.
+            restartQuiet()
+            break
+          }
           armed = false
           cancelQuiet()
           break
+        }
         case 'scroll':
           onScroll()
           break
@@ -710,6 +777,8 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
     },
     reset: top => {
       armed = false
+      armedByWheel = false
+      pendingIntent = false
       // The finger belonged to the previous session or node; it cannot arm this one.
       touchIds.clear()
       previousTop = top
@@ -718,18 +787,24 @@ export function createHistoryAutoLoadGate(hooks: HistoryAutoLoadHooks): HistoryA
     dispose: () => {
       disposed = true
       armed = false
+      armedByWheel = false
+      pendingIntent = false
       touchIds.clear()
       cancelQuiet()
     },
-    state: () => ({ armed, previousTop }),
+    state: () => ({ armed, previousTop, pendingIntent }),
   }
 }
 
-/** Attach a gate to one scroller; the disposer removes exactly the listeners it added. */
+/** Observe descendant input but only this scroller's movement; return its listener disposer. */
 export function bindHistoryAutoLoadGate(scroller: EventTarget, gate: Pick<HistoryAutoLoadGate, 'handleEvent'>): () => void {
-  for (const type of HISTORY_INTENT_EVENTS) scroller.addEventListener(type, gate.handleEvent, HISTORY_INTENT_LISTENER_OPTIONS)
+  const onEvent = (event: Event): void => {
+    if ((event.type === 'scroll' || event.type === 'scrollend') && event.target !== scroller) return
+    gate.handleEvent(event)
+  }
+  for (const type of HISTORY_INTENT_EVENTS) scroller.addEventListener(type, onEvent, HISTORY_INTENT_LISTENER_OPTIONS)
   return () => {
-    for (const type of HISTORY_INTENT_EVENTS) scroller.removeEventListener(type, gate.handleEvent, HISTORY_INTENT_LISTENER_OPTIONS)
+    for (const type of HISTORY_INTENT_EVENTS) scroller.removeEventListener(type, onEvent, HISTORY_INTENT_LISTENER_OPTIONS)
   }
 }
 

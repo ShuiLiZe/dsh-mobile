@@ -39,6 +39,15 @@ async function fixture(configured = true, createGateway = vi.fn(async () => gate
 }
 
 describe('self-hosted HTTP origin lifecycle', () => {
+  it('publishes the actual IPv6 backend URL after creating the listener', async () => {
+    const { controller, config, createGateway } = await fixture()
+    await config.configure({ publicOrigin: 'https://phone.example.com:8815', listenHost: '::1' })
+    await controller.initialize()
+    await controller.setEnabled(true)
+    expect(createGateway).toHaveBeenCalledWith(expect.objectContaining({ listenHost: '::1', allowedCidrs: ['::1/128'] }))
+    expect(controller.status()).toMatchObject({ state: 'ready', backendOrigin: 'http://[::1]:41234' })
+  })
+
   it('owns only a gateway, preserving external HTTPS and reporting the actual backend port', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)

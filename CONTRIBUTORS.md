@@ -1,8 +1,14 @@
 # 贡献者 / Contributors
 
-GitHub 的 [Contributors 图表](https://github.com/saya-ch/dsh-mobile/graphs/contributors) 按进入默认分支的提交自动统计，无法手动加入仅提交 issue 或 PR 提案的成员。本页按截至 2026-10-18 的实际参与方式感谢社区成员；仓库维护者与自动依赖更新仍可在 GitHub 历史记录中查看。
+GitHub 的 [Contributors 图表](https://github.com/saya-ch/dsh-mobile/graphs/contributors) 按进入默认分支的提交自动统计，无法手动加入仅提交 issue 或 PR 提案的成员。本页按截至 2026-10-21 的实际参与方式感谢社区成员；仓库维护者与自动依赖更新仍可在 GitHub 历史记录中查看。
 
-GitHub's Contributors graph counts commits on the default branch; issue reports and PR proposals cannot be manually added to it. This page credits community members by how they contributed, through 2026-10-18. The repository maintainer and automated dependency updates remain visible in GitHub's history.
+GitHub's Contributors graph counts commits on the default branch; issue reports and PR proposals cannot be manually added to it. This page credits community members by how they contributed, through 2026-10-21. The repository maintainer and automated dependency updates remain visible in GitHub's history.
+
+## 0.6.14 代码贡献与反馈 / Code contributions and reports for 0.6.14
+
+[@chintoleung](https://github.com/chintoleung) 的 [#239](https://github.com/saya-ch/dsh-mobile/pull/239) 将触摸历史自动加载延后至手势落定，并增加真实分页回归。0.6.14 保留原作者的三个提交，并追加维护者对滚动事件归属、新手势意图和混合输入的修正。感谢 [@gugubb5](https://github.com/gugubb5) 在 [#237](https://github.com/saya-ch/dsh-mobile/issues/237) 反馈侧栏入口共存问题，以及 [@faruzanCN](https://github.com/faruzanCN) 在 [#238](https://github.com/saya-ch/dsh-mobile/issues/238) 提出 IPv6 反代需求。
+
+[@chintoleung](https://github.com/chintoleung)'s [#239](https://github.com/saya-ch/dsh-mobile/pull/239) defers touch-driven history loading until the gesture settles and adds real pagination regressions. Version 0.6.14 retains the author's three commits alongside maintainer fixes for scroll-event ownership, new-gesture intent and mixed input. Thanks [@gugubb5](https://github.com/gugubb5) for reporting sidebar-entry coexistence in [#237](https://github.com/saya-ch/dsh-mobile/issues/237), and [@faruzanCN](https://github.com/faruzanCN) for the IPv6 reverse-proxy request in [#238](https://github.com/saya-ch/dsh-mobile/issues/238).
 
 ## 0.6.12 问题定位 / Issue findings for 0.6.12
 
@@ -107,7 +113,9 @@ Thanks [@xhwxt](https://github.com/xhwxt) for the document-picker proposal in [#
 | [@CharlesLueng](https://github.com/CharlesLueng) | [#68](https://github.com/saya-ch/dsh-mobile/issues/68) |
 | [@chintoleung](https://github.com/chintoleung) | [#103](https://github.com/saya-ch/dsh-mobile/issues/103), [#166](https://github.com/saya-ch/dsh-mobile/issues/166), [#189](https://github.com/saya-ch/dsh-mobile/issues/189), [#228](https://github.com/saya-ch/dsh-mobile/issues/228) |
 | [@chmzs](https://github.com/chmzs) | [#73](https://github.com/saya-ch/dsh-mobile/issues/73) |
+| [@faruzanCN](https://github.com/faruzanCN) | [#238](https://github.com/saya-ch/dsh-mobile/issues/238) |
 | [@gjzbbs](https://github.com/gjzbbs) | [#123](https://github.com/saya-ch/dsh-mobile/issues/123) |
+| [@gugubb5](https://github.com/gugubb5) | [#237](https://github.com/saya-ch/dsh-mobile/issues/237) |
 | [@fishdivinity](https://github.com/fishdivinity) | [#202](https://github.com/saya-ch/dsh-mobile/issues/202) |
 | [@hairyf](https://github.com/hairyf) | [#114](https://github.com/saya-ch/dsh-mobile/issues/114) |
 | [@helan-1997](https://github.com/helan-1997) | [#168](https://github.com/saya-ch/dsh-mobile/issues/168) |

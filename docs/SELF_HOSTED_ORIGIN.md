@@ -28,15 +28,15 @@
 | 字段 | 代理与 DSH 同机 | 代理在另一台 LAN 设备 |
 | --- | --- | --- |
 | 公网 HTTPS 地址 | `https://phone.example.com:8815` | `https://phone.example.com:8815` |
-| 私有监听 IPv4 | `127.0.0.1` | DSH 电脑的私网地址，如 `192.168.50.10` |
+| 私有监听 IP | `127.0.0.1` 或 `::1` | DSH 电脑的私网地址，如 `192.168.50.10` 或 `fd12:3456:789a::10` |
 | HTTP 后端端口 | `3444` | `3444` |
-| 允许的代理来源 CIDR | `127.0.0.0/8` | 代理的实际来源，如 `192.168.50.1/32` |
+| 允许的代理来源 CIDR | IPv4 使用 `127.0.0.0/8`；IPv6 使用 `::1/128` | 代理的实际来源，如 `192.168.50.1/32` 或 `fd12:3456:789a::1/128` |
 
-公网地址只能是 HTTPS Origin，可带非 443 端口；不包含路径、账号密码、查询参数或 fragment。私有/保留 IP、本地域名和 IPv6 字面地址不适用于此提供方。
+公网地址只能是 HTTPS Origin，可带非 443 端口；不包含路径、账号密码、查询参数或 fragment。域名可以通过 A/AAAA 记录提供 IPv4、IPv6 或双栈访问；私有/保留 IP、本地域名和 IPv6 字面地址不适用于公网地址字段。
 
-监听地址必须是**本机已有的明确回环或 RFC1918 私有 IPv4**，不能填 `0.0.0.0`、主机名、公网 IP 或 IPv6。端口必须是 **1024–65535** 的整数，并排除 3443（局域网网关）与 3080（DSH 自身）；请使用未被占用的端口。
+监听地址必须是**本机已有的明确回环、RFC1918 私有 IPv4 或 IPv6 ULA（`fc00::/7`）**。IPv6 直接填写 `::1` 或 ULA 地址，不加方括号、端口或 zone ID；面板给出的 HTTP 后端 URL 会自动补齐方括号，例如 `http://[::1]:3444`。不能填写 `0.0.0.0`、`::`、主机名、公网 IP 或 IPv6 链路本地地址。端口必须是 **1024–65535** 的整数，并排除 3443（局域网网关）与 3080（DSH 自身）；请使用未被占用的端口。
 
-CIDR 限制针对 TCP 连接的**直接来源地址**，不是手机 IP，也不是 `X-Forwarded-For`、`X-Real-IP` 或 `Forwarded`。Docker、桥接或 NAT 可能改变这个地址，应填写后端实际看到的私网来源。优先用单地址 `/32`，不要为了排错放宽整个局域网。最多 16 项，用空格或逗号分隔；只允许回环/私网网段，网络地址不能带主机位。LAN 监听必须显式列出私网代理来源。
+CIDR 限制针对 TCP 连接的**直接来源地址**，不是手机 IP，也不是 `X-Forwarded-For`、`X-Real-IP` 或 `Forwarded`。Docker、桥接或 NAT 可能改变这个地址，应填写后端实际看到的私网来源。优先用单地址 IPv4 `/32` 或 IPv6 `/128`，不要为了排错放宽整个局域网。最多 16 项，用空格或逗号分隔；只允许与监听地址同一 IP 协议的回环/私网网段，网络地址不能带主机位，不能使用 `::/0`。私网监听必须显式列出私网代理来源。
 
 代理后的手机可能共享一个直接来源地址。插件 0.6.12 起，错误凭据仍共享该来源的失败限额，但有效的一次性配对码不会被匿名失败耗尽；已认证设备的续期和探测按设备分别限频，并限制未完成操作。不需要为此添加或信任转发 IP 请求头。旧版出现 `429 rate_limited` 时先升级插件并保留配对记录，不要放宽来源网段或公开裸 DSH 端口。
 
@@ -53,6 +53,34 @@ CIDR 限制针对 TCP 连接的**直接来源地址**，不是手机 IP，也不
 [Lucky 官方 Web 文档](https://www.lucky666.cn/docs/modules/web/)说明其支持 WebSocket。配置界面随版本变化，但本插件要求不变：保留外部请求 Host，不要启用“使用目标地址Host”；若版本提供自定义 Host，请填写完整公网主机名及端口。TLS/证书配置在 Lucky，不在这个 HTTP 后端上配置。
 
 若代理在另一台机器上，还需由管理员保证网络可达，并将主机防火墙入站范围限制到代理的实际私网来源；此功能不自动改防火墙。
+
+### Nginx 与 IPv6
+
+手机到 Nginx 的公网 IPv6 连接，与 Nginx 到 DSH Mobile 的 HTTP 后端连接是两段独立连接。**公网入口使用 IPv6，不要求后端也使用 IPv6**。同机 Nginx 可以通过 IPv6 接收手机请求，再代理到 `http://127.0.0.1:3444`；这时来源 CIDR 仍是 IPv4 回环。若后端明确监听 `::1`，Nginx 目标改为 `http://[::1]:3444`，来源改为 `::1/128`。
+
+在现有已配置 HTTPS 证书的 Nginx 站点中，保留外部 Host 与 WebSocket 升级头：
+
+```nginx
+# 放在 http 块中；已定义时复用现有 map。
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# 放在对应 HTTPS server 块中。
+location / {
+    proxy_pass http://127.0.0.1:3444;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+}
+```
+
+`$http_host` 保留手机请求中的非默认端口；不要替换为后端地址。参见 [Nginx WebSocket 官方说明](https://nginx.org/en/docs/http/websocket.html)与[请求头设置](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)。公网域名的 AAAA、Nginx IPv6 HTTPS 监听、证书和防火墙仍由你配置。
+
+若 Nginx 与 DSH 分处两台只有公网互通的机器，不能直接把此明文 HTTP 后端暴露到公网。先建立可信私网/VPN 链路，再填其私有 IPv4/ULA 地址及代理的实际来源 CIDR；仅有公网 IPv6 地址并不提供这条私网链路。
 
 ## 状态与手机验证
 
@@ -83,7 +111,7 @@ CIDR 限制针对 TCP 连接的**直接来源地址**，不是手机 IP，也不
 ## 常见问题
 
 - **端口占用**：换一个空闲后端端口并同步修改代理目标；不要挪动现有 LAN 或 DSH 端口。
-- **监听地址不可用**：填写 DSH 本机当前私有 IPv4，不是代理机器的 IP。
+- **监听地址不可用**：填写 DSH 本机当前回环、私有 IPv4 或 ULA，不是代理机器的 IP；公网入口能走 IPv6 不代表本机已分配 ULA。
 - **被拒绝 / 403**：核对直接来源 CIDR、完整外部 Host 和 HTTPS Origin；伪造转发头不会绕过这些检查。
 - **HTTP 页面可开但实时功能失败**：核对代理 WebSocket 转发、超时及路径白名单，不要通过关闭来源验证来排错。
 - **只有“后端已监听”**：这是预期语义；继续检查公网 DNS、端口映射到 HTTPS 代理、证书及手机实际访问。

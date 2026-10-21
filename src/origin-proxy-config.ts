@@ -17,8 +17,8 @@ const MIN_ORIGIN_LISTEN_PORT = 1024
 const RESERVED_LAN_GATEWAY_PORT = 3443
 /** DSH's own WebServer port; the plugin cannot function while it is taken. */
 const RESERVED_DSH_WEB_PORT = 3080
-const PRIVATE_NETWORKS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'].map(parseCidr)
-const TRUSTED_NETWORKS = [...PRIVATE_NETWORKS, parseCidr('127.0.0.0/8')]
+const PRIVATE_NETWORKS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'].map(parseCidr)
+const TRUSTED_NETWORKS = [...PRIVATE_NETWORKS, parseCidr('127.0.0.0/8'), parseCidr('::1/128')]
 
 /** A private HTTP listener behind a user-managed HTTPS reverse proxy. */
 export interface OriginSettings {
@@ -62,13 +62,19 @@ export function validateOriginPublicOrigin(value: unknown): string {
   return url.origin
 }
 
-/** Bind only one explicit loopback or RFC1918 IPv4 interface, never all interfaces. */
+/** Bind one explicit loopback, RFC1918 IPv4 or IPv6 ULA interface; zone IDs are unsupported. */
 export function validateOriginListenHost(value: unknown): string {
-  if (typeof value !== 'string' || isIP(value) !== 4
-    || (!isLoopbackAddress(value) && !addressAllowed(value, PRIVATE_NETWORKS))) {
+  const addressFamily = isIP(value)
+  if (typeof value !== 'string' || value.includes('%') || addressFamily === 0
+    || !addressAllowed(value, TRUSTED_NETWORKS.filter(range => range.bits === (addressFamily === 6 ? 128 : 32)))) {
     throw new Error('origin_listen_host_invalid')
   }
-  return value
+  return addressFamily === 6 ? new URL('http://[' + value + ']').hostname.slice(1, -1) : value
+}
+
+/** Format a validated backend listener, including the brackets required by IPv6 URLs. */
+export function formatOriginBackendOrigin(listenHost: string, listenPort: number): string {
+  return 'http://' + (isIP(listenHost) === 6 ? '[' + listenHost + ']' : listenHost) + ':' + String(listenPort)
 }
 
 export function validateOriginListenPort(value: unknown): number {
@@ -85,18 +91,22 @@ export function validateOriginListenPort(value: unknown): number {
 
 /** Authorize direct proxy socket peers, not untrusted forwarded client headers. */
 export function validateOriginAllowedCidrs(value: unknown, listenHost: string): readonly string[] {
-  const input = value === undefined && isLoopbackAddress(listenHost) ? ['127.0.0.0/8'] : value
+  const addressFamily = isIP(listenHost)
+  const input = value === undefined && isLoopbackAddress(listenHost)
+    ? [addressFamily === 6 ? '::1/128' : '127.0.0.0/8'] : value
   if (!Array.isArray(input) || input.length === 0 || input.length > 16) {
     throw new Error('origin_allowed_cidrs_invalid')
   }
   const cidrs: string[] = []
   for (const entry of input) {
-    if (typeof entry !== 'string' || entry.length > 64 || isIP(entry.split('/')[0] ?? '') !== 4) {
+    if (typeof entry !== 'string' || entry.length > 64 || entry.includes('%')
+      || isIP(entry.split('/')[0] ?? '') !== addressFamily) {
       throw new Error('origin_allowed_cidrs_invalid')
     }
     try {
       const cidr = parseCidr(entry)
-      if (cidr.bits !== 32 || !TRUSTED_NETWORKS.some(range => cidr.prefix >= range.prefix
+      if (cidr.bits !== (addressFamily === 6 ? 128 : 32)
+        || !TRUSTED_NETWORKS.some(range => cidr.bits === range.bits && cidr.prefix >= range.prefix
         && addressAllowed(entry.split('/')[0], [range]))) throw new Error('untrusted CIDR')
       cidrs.push(cidr.source)
     } catch { throw new Error('origin_allowed_cidrs_invalid') }
@@ -167,7 +177,7 @@ export class OriginConfigStore {
         listenHost: settings.listenHost,
         listenPort: settings.listenPort,
         allowedCidrs: settings.allowedCidrs,
-        backendOrigin: 'http://' + settings.listenHost + ':' + String(settings.listenPort),
+        backendOrigin: formatOriginBackendOrigin(settings.listenHost, settings.listenPort),
       }),
       storagePath: this.stateRoot,
       ...(this.errorCode === undefined ? {} : { errorCode: this.errorCode }),

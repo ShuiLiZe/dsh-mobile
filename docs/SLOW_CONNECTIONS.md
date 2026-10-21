@@ -20,11 +20,11 @@
 
 插件 0.6.11 起会在插件日志（`$DSH_HOME/mobile-access/logs/dsh-mobile.log`）记录有限的 `auth failure` HTTP 诊断：区分授权与 CSRF 拒绝，包含状态、方法、安全路径或路径类别、相关 Cookie／请求头是否存在及计数、规范化 Origin 和受支持的 fetch-site 值，不记录令牌、Cookie 值、查询参数或任意原始路径。每个网关的两类诊断分别限频，首条立即记录，30 秒窗口内同类拒绝聚合；`suppressed` 表示此前被抑制的同类记录数量，不是全部请求数，也不限定于当前路径。它帮助排查凭据未携带或 CSRF 校验失败，不会自动修复 401／403。没有日志也不代表认证成功：更早的 Host／Origin 拒绝、WebSocket 升级和原生配对／续期不在这两处记录范围内。分享前仍应检查日志。
 
-## HTTP 400、408 与 431 的区别（开发中）
+## HTTP 400、408 与 431 的区别（插件 0.6.13 起）
 
-尚未发布的插件修正会把请求接收超时区分为 `408 request_timeout`，请求头过大区分为 `431 headers_too_large`；其他非法 HTTP 请求仍为 `400 bad_request`。旧版可能把这几类情况都返回成 400 和相同的短 JSON，因此状态码与“24 字节”不足以定位原因。
+插件 0.6.13 起把请求接收超时区分为 `408 request_timeout`，请求头过大区分为 `431 headers_too_large`；其他非法 HTTP 请求仍为 `400 bad_request`。旧版可能把这几类情况都返回成 400 和相同的短 JSON，因此状态码与“24 字节”不足以定位原因。
 
-新的 `http failure` 日志按网关区分 `parser`、`target`、`upstream` 三类：分别表示 HTTP 解析／接收失败、非法请求目标、已认证的 `POST /api/session/prompt` 被上游拒绝。每类首条立即记录，后续 30 秒内聚合，下一条的 `suppressed` 是此前被抑制的同类数量。日志不保留原始报错、请求正文、原始包、Cookie、Token、查询参数或任意 URL；不记录某条也不能证明它成功。
+`http failure` 日志按网关区分 `parser`、`target`、`upstream` 三类：分别表示 HTTP 解析／接收失败、非法请求目标、已认证的 `POST /api/session/prompt` 被上游拒绝。每类首条立即记录，后续 30 秒内聚合，下一条的 `suppressed` 是此前被抑制的同类数量。日志不保留原始报错、请求正文、原始包、Cookie、Token、查询参数或任意 URL；不记录某条也不能证明它成功。
 
 `upstreamTimeoutMs` 既用于上游传输等待，也配置了入站完整请求的接收期限；持续上传不保证避开这个总期限，Node 的定期检查会影响实际触发时刻。不要仅凭 HTTP 400 就删除配对、清空 App 数据或自动重发。先区分拒绝来源，并查看实际响应正文、Content-Type、准确版本和脱敏的代理上游状态；消息或工具是否已执行不明时，先核对会话结果。
 

@@ -1,6 +1,7 @@
 import type { MobileAccessControlStore } from './control.js'
 import type { MobileAccessGateway } from './gateway.js'
 import type { OriginConfigStore, OriginSettings } from './origin-proxy-config.js'
+import { formatOriginBackendOrigin } from './origin-proxy-config.js'
 import type { RemoteProviderController } from './remote.js'
 
 export type OriginState = 'off' | 'unavailable' | 'starting' | 'ready' | 'error'
@@ -125,7 +126,7 @@ export class OriginController implements RemoteProviderController {
     }
     this.publish({
       enabled: true, state: 'ready', origin: settings.publicOrigin,
-      backendOrigin: 'http://' + settings.listenHost + ':' + String(gateway.address().port),
+      backendOrigin: formatOriginBackendOrigin(settings.listenHost, gateway.address().port),
     })
   }
 

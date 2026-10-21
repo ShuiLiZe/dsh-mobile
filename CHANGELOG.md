@@ -2,13 +2,20 @@
 
 Notable changes are recorded here. GitHub Releases provide the downloadable packages and generated commit notes.
 
+## 0.6.14 - 2026-10-21
+
+- Defer touch-triggered history loading until the gesture settles, cancel pending loading when the reader leaves the top zone, and scope movement/settle events to the conversation scrollport. Withdraw an older refused loading intent when a new gesture begins. Retain @chintoleung's three original commits from [#239](https://github.com/saya-ch/dsh-mobile/pull/239) alongside maintainer regression fixes.
+- Keep Mobile Access usable beside other sidebar-footer actions: use a compact icon button when the row is shared, retain its accessible name, and restore the full label when it is alone. Thanks @gugubb5 for [#237](https://github.com/saya-ch/dsh-mobile/issues/237).
+- Support explicit IPv6 loopback and ULA listeners and same-family private proxy-source CIDRs for an existing HTTPS reverse proxy. Display bracketed IPv6 backend URLs and clarify the difference between the phone-to-proxy and proxy-to-backend connections. Public frontend IPv6 does not require an IPv6 backend; exposing the plain HTTP backend publicly remains unsupported. Thanks @faruzanCN for [#238](https://github.com/saya-ch/dsh-mobile/issues/238).
+- Add separate bug-report and feature-request forms with environment, reproduction, expected/actual behavior and third-party plugin comparison prompts.
+- Link the independent experimental [dsh-mobile-iroh](https://github.com/saya-ch/dsh-mobile-iroh) project and summarize its local implementation progress without enabling a new provider in the stable plugin or App.
+- Android App remains independently published as 0.6.5 (build 81); no native changes or new APK are included.
+
 ## 0.6.13 - 2026-10-19
 
-- Distinguish inbound HTTP receive timeouts (408 `request_timeout`) and oversized request headers (431 `headers_too_large`) from other malformed HTTP requests (400 `bad_request`). Preserve the existing receive limits and single-attempt POST forwarding; do not automatically retry messages.
+- Distinguish inbound HTTP receive timeouts (408 `request_timeout`) and oversized request headers (431 `headers_too_large`) from other malformed HTTP requests (400 `bad_request`). Preserve the existing receive limits, authentication checks and single-attempt POST forwarding; do not automatically retry messages.
 - Add sampled HTTP rejection diagnostics that distinguish parser errors, invalid targets and authenticated upstream prompt rejections without recording request contents, raw packets, Cookies or arbitrary URLs. Connect diagnostic sinks for all Gateway factories, including own-origin and self-signed FRP entries.
-- Add real-page prompt-failure checks for restored text/images and visible errors. Separately reproduce a DSH 0.2.0-rc.2 and 0.2.1-rc.2 lifecycle defect: leaving a Session during a pending send cancels that request and discards its recovery state, including in pure stock profiles without Mobile installed. DSH source remains unchanged; this upstream defect and the exact cause of the reported #234 rejection are not claimed fixed. Thanks @Void-LifeStream for [#234](https://github.com/saya-ch/dsh-mobile/issues/234).
-- Distinguish HTTP receive timeouts and oversized request headers in the Gateway response and add bounded, privacy-preserving rejection diagnostics across all Gateway factories. Existing request limits, authentication checks and single-attempt POST forwarding remain unchanged; this release does not add automatic message retries.
-- Add a packed prompt-failure smoke covering text/image recovery and visible DSH errors on DSH 0.2.0-rc.2 and 0.2.1-rc.2. The optional navigation diagnostic records an upstream Session-lifecycle failure but is not a passing regression lane.
+- Add packed real-page prompt-failure checks for restored text/images and visible errors on DSH 0.2.0-rc.2 and 0.2.1-rc.2. Separately reproduce a DSH lifecycle defect: leaving a Session during a pending send cancels that request and discards its recovery state, including in pure stock profiles without Mobile installed. The optional navigation diagnostic records that upstream Session-lifecycle failure but is not a passing regression lane. DSH source remains unchanged; this upstream defect and the exact cause of the reported #234 rejection are not claimed fixed. Thanks @Void-LifeStream for [#234](https://github.com/saya-ch/dsh-mobile/issues/234).
 - Keep DSH source and installed frontend artifacts read-only. The proposed iroh P2P channel in [#235](https://github.com/saya-ch/dsh-mobile/issues/235) is intentionally outside this repository and this release; it requires a separate host-side proof of concept.
 
 ## 0.6.12 - 2026-10-18
