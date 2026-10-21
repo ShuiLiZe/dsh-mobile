@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
-async function listen(server: Server): Promise<number> {
+async function listen(server: Server, host = '127.0.0.1'): Promise<number> {
   const sockets = new Set<Socket>()
   server.on('connection', socket => {
     sockets.add(socket)
@@ -30,7 +30,7 @@ async function listen(server: Server): Promise<number> {
   })
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
+    server.listen(0, host, resolve)
   })
   cleanups.push(async () => {
     for (const socket of sockets) socket.destroy()
@@ -46,7 +46,7 @@ interface HttpResult {
   readonly body: string
 }
 
-async function fixture(allowedCidrs = ['127.0.0.0/8']) {
+async function fixture(allowedCidrs = ['127.0.0.0/8'], listenHost = '127.0.0.1', ingressHost = '127.0.0.1') {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-origin-live-'))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const observed: { url: string; headers: IncomingHttpHeaders; body: string }[] = []
@@ -82,7 +82,7 @@ async function fixture(allowedCidrs = ['127.0.0.0/8']) {
     allowedCidrs: ['127.0.0.0/8'], upstreamOrigin: 'http://127.0.0.1:' + String(upstreamPort),
     stateFile: join(directory, 'lan-devices.json'), tls: { mode: 'disabled' },
   })
-  const settings = parseOriginSettings({ publicOrigin: PUBLIC_ORIGIN, allowedCidrs })
+  const settings = parseOriginSettings({ publicOrigin: PUBLIC_ORIGIN, allowedCidrs, listenHost })
   const config = originGatewayConfig(template, settings, join(directory, 'remote-devices.json'), 'a'.repeat(64), 0)
   const gateway = new MobileAccessGateway(config, new MemoryDeviceStore())
   await gateway.start()
@@ -98,7 +98,7 @@ async function fixture(allowedCidrs = ['127.0.0.0/8']) {
   // A local TLS-terminating reverse proxy; no request leaves loopback.
   const ingress = createHttpsServer({ key: certificate.private, cert: certificate.cert }, (incoming, response) => {
     const outgoing = requestHttp({
-      host: '127.0.0.1', port: backendPort, path: incoming.url, method: incoming.method,
+      host: settings.listenHost, port: backendPort, path: incoming.url, method: incoming.method,
       headers: { ...incoming.headers, 'x-forwarded-proto': 'https' }, agent: false,
     }, upstreamResponse => {
       response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers)
@@ -109,7 +109,7 @@ async function fixture(allowedCidrs = ['127.0.0.0/8']) {
   })
   ingress.on('upgrade', (incoming, client, head) => {
     const outgoing = requestHttp({
-      host: '127.0.0.1', port: backendPort, path: incoming.url, headers: incoming.headers, agent: false,
+      host: settings.listenHost, port: backendPort, path: incoming.url, headers: incoming.headers, agent: false,
     })
     outgoing.once('error', () => { client.destroy() })
     outgoing.once('response', response => {
@@ -129,8 +129,8 @@ async function fixture(allowedCidrs = ['127.0.0.0/8']) {
     })
     outgoing.end()
   })
-  const ingressPort = await listen(ingress)
-  const tlsOptions = { host: '127.0.0.1', port: ingressPort, servername: 'phone.example.com', ca: certificate.cert, agent: false as const }
+  const ingressPort = await listen(ingress, ingressHost)
+  const tlsOptions = { host: ingressHost, port: ingressPort, servername: 'phone.example.com', ca: certificate.cert, agent: false as const }
   const request = (pathname: string, options: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<HttpResult> =>
     new Promise((resolve, reject) => {
       const outgoing = requestHttps({
@@ -199,6 +199,42 @@ async function pair(local: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('local TLS reverse proxy to the real HTTP origin gateway', () => {
+  it('accepts an IPv6 TLS frontend while keeping the default private IPv4 backend', async () => {
+    const local = await fixture(['127.0.0.0/8'], '127.0.0.1', '::1')
+    expect(local.config.listenHost).toBe('127.0.0.1')
+    expect((await local.request('/mobile-access/discovery')).status).toBe(200)
+    const paired = await pair(local)
+    expect((await local.request('/api/test', { headers: { cookie: paired.cookie } })).status).toBe(200)
+    expect(await local.webSocket(paired.cookie)).toEqual({ status: 101, echo: 'origin-websocket-ok' })
+  })
+
+  it('pairs and forwards authenticated API and WebSocket traffic through an IPv6 loopback backend', async () => {
+    const local = await fixture(['::1/128'], '::1')
+    expect(local.config.listenHost).toBe('::1')
+    expect((await local.request('/mobile-access/discovery')).status).toBe(200)
+    expect((await local.request('/api/test')).status).toBe(401)
+    const paired = await pair(local)
+    expect((await local.request('/api/test', { headers: { cookie: paired.cookie } })).status).toBe(200)
+    expect((await local.request('/api/test', { method: 'POST', body: '{}', headers: { cookie: paired.cookie } })).status).toBe(403)
+    expect((await local.request('/api/test', {
+      method: 'POST', body: '{}', headers: { cookie: paired.cookie, [CSRF_HEADER]: paired.csrf },
+    })).status).toBe(200)
+    expect(await local.webSocket(paired.cookie)).toEqual({ status: 101, echo: 'origin-websocket-ok' })
+    expect((await local.request('/mobile-access/discovery', { headers: { host: '[::1]:' + String(local.backendPort) } })).status).toBe(403)
+    expect((await local.webSocket(paired.cookie, { origin: 'https://attacker.example:8815' })).status).toBe(403)
+  })
+
+  it('requires the actual IPv6 socket peer even when all forwarded headers name an allowed ULA proxy', async () => {
+    const local = await fixture(['fd12:3456::2/128'], '::1')
+    const headers = {
+      'x-forwarded-for': 'fd12:3456::2', 'x-real-ip': 'fd12:3456::2',
+      forwarded: 'for="[fd12:3456::2]";proto=https;host=phone.example.com:8815',
+    }
+    expect((await local.request('/mobile-access/discovery', { headers })).status).toBe(403)
+    expect((await local.webSocket('', headers)).status).toBe(403)
+    expect(local.observed).toHaveLength(0)
+  })
+
   it('retains public HTTPS identity and authenticates HTTP and WebSocket traffic end to end', async () => {
     const local = await fixture()
     expect(local.gateway.address().origin).toBe(PUBLIC_ORIGIN)

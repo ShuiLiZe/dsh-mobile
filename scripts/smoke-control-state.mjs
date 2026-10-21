@@ -275,7 +275,7 @@ async function withControl(browser, name, options, run) {
       caddySecretId: page.getByLabel('Tencent Cloud SecretId', { exact: true }),
       caddySecretKey: page.getByLabel('Tencent Cloud SecretKey', { exact: true }),
       originPublic: page.getByLabel('Public HTTPS address', { exact: true }),
-      originHost: page.getByLabel('Private listen IPv4', { exact: true }),
+      originHost: page.getByLabel('Private listen IP (IPv4 / IPv6)', { exact: true }),
       originPort: page.getByLabel('HTTP backend port', { exact: true }),
       originCidrs: page.getByLabel('Allowed proxy source CIDRs', { exact: true }),
     }
@@ -689,6 +689,32 @@ try {
     assert.equal(count('POST', trustedPath), 0, 'Editing trusted networks saved without an explicit action')
     assert.equal(count('POST', `${prefix}/remote/origin/configure`), 0, 'Editing origin fields saved without an explicit action')
     assert.equal(count('POST', caddyPath), 0, 'Editing Caddy fields saved without an explicit action')
+  })
+  cases++
+
+  await withControl(browser, 'IPv6 proxy host input retains and submits an expanded ULA address', {}, async ({ page, ui, count, waitRequest, consumed, settle, openRemote }) => {
+    await openRemote()
+    const modeBefore = await consumed(modePath)
+    const remoteBefore = await consumed(remotePath)
+    await ui.external.check()
+    await settle(modePath, modeBefore)
+    await settle(remotePath, remoteBefore)
+    await waitUntil(() => ui.external.isDisabled(), value => value === false, 'completed external mode change')
+    const host = 'fd12:3456:789a:0000:0000:0000:0000:0010'
+    const source = 'fd12:3456:789a::1/128'
+    await ui.originPublic.fill('https://ipv6-proxy.example.com:8815')
+    await ui.originHost.fill('')
+    await ui.originHost.pressSequentially(host)
+    await ui.originCidrs.fill(source)
+    assert.equal(await ui.originHost.inputValue(), host, 'IPv6 host was truncated by the IPv4 input limit')
+    const path = `${prefix}/remote/origin/configure`
+    assert.equal(count('POST', path), 0)
+    await page.getByRole('button', { name: 'Save and start backend', exact: true }).click()
+    const saved = await waitRequest('POST', path)
+    assert.deepEqual(saved.body, {
+      publicOrigin: 'https://ipv6-proxy.example.com:8815', listenHost: host,
+      listenPort: 3444, allowedCidrs: [source],
+    })
   })
   cases++
 

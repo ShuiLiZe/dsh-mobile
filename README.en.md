@@ -26,13 +26,13 @@
   <a href="#compatibility">Compatibility</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="#contributors">Contributors</a> ·
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.13">Release notes</a> ·
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14">Release notes</a> ·
   <a href="README.md">简体中文</a>
 </p>
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **Current stable release: 0.6.13**. Distinguish Gateway receive timeouts and oversized headers, add privacy-bounded rejection diagnostics, and cover packed text/image prompt failures. Android App **0.6.5** is unchanged and needs no matching update. [Release notes and downloads](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.13) · [Full changelog](CHANGELOG.md).
+> **Current stable release: 0.6.14**. Improve history-loading gestures and shared sidebar-footer entries, and support IPv6 loopback/ULA backends for an existing HTTPS reverse proxy. Android App **0.6.5** is unchanged and needs no matching update. [Release notes and downloads](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14) · [Full changelog](CHANGELOG.md).
 >
 > **Version policy**: since plugin **0.6.2**, the Android app and plugin use independent version numbers and releases. Their numbers do not need to match, and a plugin update does not imply an app update. [Compatibility notes](#compatibility).
 
@@ -128,6 +128,8 @@ Use this when the phone and computer share Wi-Fi, Ethernet, or a phone hotspot. 
 3. In the Android app, open **Local network**, scan for computers, select the device, then scan the QR code or paste the pairing key.
 4. Pairing creates persistent device trust. Later app launches discover and connect automatically; Wi-Fi, hotspot, and DHCP address changes normally do not require pairing again.
 
+When other plugin entries share the sidebar footer, **Mobile access** becomes a phone-icon button. Hover to read its name; clicking opens the same panel. Its text label returns when the entry is alone.
+
 Port note: `dsh web --port` changes the DSH Web upstream port (3080 by default), which the plugin follows automatically. `dsh-mobile setup --port` changes the Mobile HTTPS listener (3443 by default), and the pairing QR code includes the selected port.
 
 <details>
@@ -181,7 +183,7 @@ After selecting the channel in the panel:
    - **Tailscale Funnel**: select **Enable remote access**, complete the one-time Tailscale sign-in on the official page, follow the panel prompt to allow Funnel, then return to DSH and wait until the connection is ready.
    - **cpolar**: select **Install official component**, sign in to the cpolar dashboard and obtain an Authtoken, paste it, then select **Save and connect**. The component is downloaded into the plugin's private directory only after confirmation; free temporary addresses may change after DSH or cpolar restarts.
    - **Self-hosted FRP (advanced)**: if you have a VPS, expand **Self-hosted connection** and enter its frps details and a public HTTPS domain or real public IPv4 address. Apply the restricted frps + Caddy template manually, or deploy with an SSH key on Ubuntu/Debian with systemd. Password login is unsupported. Use manual deployment and merge the import as described in the guide when custom Caddy sites already exist. Verify the VPS host keys against its console before deployment or cleanup. The local `frpc` is downloaded and verified on demand; VPS cleanup is separate. Android app 0.3.3 or later is required. The [self-hosted FRP guide](docs/SELF_HOSTED_FRP.en.md) covers certificates, ports, and the complete procedure.
-   - **Own reverse proxy**: open **Self-hosted connection → Own reverse proxy**, enter the public HTTPS origin (custom ports supported), private listen IPv4, separate HTTP backend port (default 3444), and allowed proxy source CIDRs, then select **Save and start backend**. This uses your existing Lucky/Nginx/Caddy without a tunnel component and requires Android app 0.4.0 or later. See the [own reverse proxy guide](docs/SELF_HOSTED_ORIGIN.en.md).
+   - **Own reverse proxy**: open **Self-hosted connection → Own reverse proxy**, enter the public HTTPS origin (custom ports supported), private listen IP (IPv4 or IPv6 loopback/ULA), separate HTTP backend port (default 3444), and allowed direct proxy source CIDRs, then select **Save and start backend**. This uses your existing Lucky/Nginx/Caddy without a tunnel component and requires Android app 0.4.0 or later. See the [own reverse proxy guide](docs/SELF_HOSTED_ORIGIN.en.md).
    - **Managed Caddy**: under **Self-hosted connection → Own reverse proxy**, select **Managed Caddy**, choose **Install managed Caddy**, and confirm the download. Enter the public HTTPS origin, Tencent Cloud DNSPod credentials and local HTTPS listen port, then choose **Save and start Caddy**. A domain and reachable public ingress are required; this does not bypass CGNAT. See the [managed Caddy guide](docs/CADDY_MANAGED.en.md) for forwarding and complete steps.
    - **cloudflared quick tunnel**: select **Install official component**. After you confirm, the plugin downloads a pinned build from the official release page into its private directory and requests a temporary public address (a quick tunnel) with **no sign-up or sign-in**. Choose this when you would rather not create an account. The quick-tunnel hostname changes on every reconnect, and Cloudflare positions quick tunnels for testing: they are rate-limited and carry no uptime guarantee, so do not rely on one for production access that must stay reachable; it suits temporary or verification use.
    - **cloudflared named tunnel**: with a Cloudflare account and domain, switch **Tunnel type** to **Named**, then supply a connector token, a public hostname and a local forward port to get an address that survives restarts. The token is stored only in the private directory and reaches cloudflared through the environment rather than the command line; see [Cloudflare named tunnel](docs/CLOUDFLARE_TUNNEL.en.md).
@@ -202,6 +204,10 @@ The own-proxy HTTP backend must remain on a trusted private network: **never por
 See [Compatibility](#compatibility) for the supported components and platforms. Locally managed programs, credentials and settings can be removed from the panel; VPS files require separate cleanup through the corresponding guide.
 
 </details>
+
+### Experimental iroh connection
+
+[dsh-mobile-iroh](https://github.com/saya-ch/dsh-mobile-iroh) is being developed independently to explore iroh connections while retaining DSH Mobile's pairing, device list and WebView experience. The local development candidate connects the Rust transport and Android app, with local QUIC/HTTPS/WSS checks and Android builds passing. It has not been integrated into this plugin or formally released; the desktop management UI, automatic certificate setup and physical cross-network acceptance remain unfinished. It is not yet a connection option in the current stable app.
 
 ## Extend and customize
 
@@ -340,7 +346,7 @@ The dedicated mobile page synchronously loads the authenticated, same-origin `/m
 
 **Old-engine limits**: API shims cannot repair JavaScript syntax an engine cannot parse. The published **DSH 0.2.1-rc.2** frontend contains class static blocks, which Chromium **92** cannot parse. This syntax became enabled by default in Chrome 94, but that does not establish full DSH compatibility on 94. [V8 announcement](https://v8.dev/blog/v8-release-94). The App's below-100 advisory is not a compatibility guarantee; choosing Continue does not make the current DSH runnable. If system WebView cannot be updated, use a phone browser already confirmed to work with the computer's mobile address, without clearing existing App pairings.
 
-**Plugin 0.6.13** retains the 0.6.12 compatibility layer and startup feedback, distinguishes Gateway receive timeouts from oversized headers, and adds packed text/image prompt-failure checks. It does not transpile or modify DSH, and it does not automatically replay messages; acceptance on the physical Huawei Chromium 92 App remains unverified. Reports should include DSH/plugin/App and WebView versions, entry mode and the first redacted console error, never tokens or complete pairing URLs.
+The current plugin retains the 0.6.12 compatibility layer and startup feedback, alongside 0.6.13's Gateway receive-timeout/header-size classification and packed text/image prompt-failure checks. It does not transpile or modify DSH, and it does not automatically replay messages; acceptance on the physical Huawei Chromium 92 App remains unverified. Reports should include DSH/plugin/App and WebView versions, entry mode and the first redacted console error, never tokens or complete pairing URLs.
 
 > **Community client (unofficial)**: [WeChat Mini-Program client](https://github.com/StrawberryAO/dsh-mobile-minapp)
 > A native WeChat Mini-Program that reuses the Mobile Access pairing and Remote stream protocol (requires dsh-mobile ≥ 0.3.8).

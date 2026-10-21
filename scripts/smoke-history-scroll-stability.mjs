@@ -166,6 +166,12 @@ try {
   await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 })
   const touchX = Math.round(geometry.x + geometry.width / 2)
   const touchY = Math.round(geometry.y + Math.min(geometry.height - 80, 160))
+  const waitForPageRequests = async (count, label) => {
+    const deadline = Date.now() + 10_000
+    while (pageRequests.length < count && Date.now() < deadline) await phone.waitForTimeout(100)
+    assert.equal(pageRequests.length, count,
+      `${label}: expected ${count} older-page request(s): ${JSON.stringify({ geometry, pageRequests, scroll: await scrollMetrics(phone) })}`)
+  }
   const dragOlder = async (fingers, previousRequests) => {
     await setScrollTop(320)
     await settleFrames(phone)
@@ -174,14 +180,17 @@ try {
       x: touchX + (index === 0 ? -15 : 15), y: touchY + step * 30, id: index + 1,
     }))
     await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0) })
-    for (let step = 1; step <= 16 && pageRequests.length === previousRequests; step++) {
+    for (let step = 1; step <= 16; step++) {
       await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(step) })
       await settleFrames(phone)
+      // The gesture is live: the gate may record intent but never start a load,
+      // because DSH's paging anchor would fight the drag still in progress.
+      assert.equal(pageRequests.length, previousRequests,
+        `touch move ${step} requested an older page mid-gesture`)
     }
     await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-    await settleFrames(phone)
-    assert.equal(pageRequests.length, previousRequests + 1,
-      `${fingers}-finger drag did not make exactly one real older-page request: ${JSON.stringify({ geometry, pageRequests, scroll: await scrollMetrics(phone) })}`)
+    // The click arrives when the gesture settles: scrollend, or the 1600ms quiet lease.
+    await waitForPageRequests(previousRequests + 1, `${fingers}-finger drag settle`)
   }
 
   const firstResponse = phone.waitForResponse(response => new URL(response.url()).pathname === '/api/session/page', { timeout: CLIENT_TIMEOUT_MS })
@@ -191,19 +200,40 @@ try {
     undefined, { timeout: CLIENT_TIMEOUT_MS })
   const busyBox = await loader.evaluate(row => ({ height: row.getBoundingClientRect().height,
     text: row.querySelector('button')?.textContent?.trim() }))
+  // A second gesture begun while the first page is still pending must not add a
+  // request: the gate's settle click is the only loader DSH ever receives.
+  const heldPoints = step => [{ x: touchX - 15, y: touchY + step * 30, id: 1 }]
+  // Park mid-content first: at the hard top no upward scroll exists, so a drag
+  // there could never re-enter the zone while the request is in flight.
+  await setScrollTop(150)
+  await settleFrames(phone)
+  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: heldPoints(0) })
+  for (let step = 1; step <= 6; step++) {
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: heldPoints(step) })
+    await settleFrames(phone)
+  }
+  assert.equal(pageRequests.length, 1, 'a live drag during a pending page requested more history')
   const beforeCommit = await scrollMetrics(phone)
   releaseFirstPage()
   const firstResult = await (await firstResponse).json()
   assert.equal(firstResult.result?.ok, true, `first real history page rejected: ${sanitized(JSON.stringify(firstResult))}`)
   assert.equal(firstResult.result.value?.hasMore, true, 'first older page unexpectedly exhausted history')
+  // The finger stays down while the held page commits under it and the drag
+  // resumes after the commit; DSH defers its compensation until the gesture settles.
   await phone.waitForFunction(text => document.querySelector('[data-conversation-scroll]')?.textContent?.includes(text),
     turnText(100), { timeout: CLIENT_TIMEOUT_MS })
-  await settleFrames(phone)
+  for (let step = 7; step <= 10; step++) {
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: heldPoints(step) })
+    await settleFrames(phone)
+  }
+  await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  // This 1800ms quiet window intentionally exceeds the gate's 1600ms lease, so
+  // any latent intent has fully expired before the no-chain assertion below.
+  await waitForQuietScroll(phone)
+  assert.equal(pageRequests.length, 1, 'the pending page or its commit chained another request during a live drag')
   const afterCommit = await scrollMetrics(phone)
   const addedHeight = afterCommit.height - beforeCommit.height
   assert(addedHeight > 100, `actual page did not enlarge history: ${JSON.stringify({ beforeCommit, afterCommit })}`)
-  assert(Math.abs((afterCommit.top - beforeCommit.top) - addedHeight) <= 12,
-    `real page prepend did not preserve viewport position: ${JSON.stringify({ beforeCommit, afterCommit, addedHeight })}`)
   assert(await loaderButton.isEnabled(), 'hasMore loader did not re-enable after the real page committed')
   const enabledBox = await loader.evaluate(row => ({ height: row.getBoundingClientRect().height,
     text: row.querySelector('button')?.textContent?.trim() }))
@@ -213,6 +243,28 @@ try {
   // gesture quiet interval, not a readiness sleep.
   await waitForQuietScroll(phone)
   assert.equal(pageRequests.length, 1, 'real page prepend or scroll compensation chained a second older request')
+
+  // A drag that reaches the zone but reverses out before settling loads nothing.
+  await setScrollTop(320)
+  await settleFrames(phone)
+  const reversalStart = pageRequests.length
+  const reversalPoints = step => [{ x: touchX - 15, y: touchY + step * 30, id: 1 }]
+  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: reversalPoints(0) })
+  for (let step = 1; step <= 10; step++) {
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: reversalPoints(step) })
+    await settleFrames(phone)
+    assert.equal(pageRequests.length, reversalStart, 'reversal drag requested history mid-gesture')
+  }
+  const zoneEntry = await scrollMetrics(phone)
+  assert(zoneEntry.top <= 64, `reversal test never reached the history zone: ${JSON.stringify(zoneEntry)}`)
+  for (let step = 1; step <= 4; step++) {
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove',
+      touchPoints: [{ x: touchX - 15, y: touchY + 300 - step * 40, id: 1 }] })
+    await settleFrames(phone)
+  }
+  await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await waitForQuietScroll(phone)
+  assert.equal(pageRequests.length, reversalStart, 'a drag that left the zone before settle still requested history')
 
   // Chromium treats two simultaneous contacts as a pinch rather than the
   // single-finger history pull. Observe actual two-contact events and require
@@ -305,6 +357,10 @@ try {
 
   await loaderButton.focus()
   assert(await loaderButton.evaluate(button => document.activeElement === button), 'real loader did not take keyboard focus')
+  // A settled, mid-content reader keeps its screen position across a keyboard load.
+  await setScrollTop(400)
+  await settleFrames(phone)
+  const keyboardBefore = await scrollMetrics(phone)
   const [, secondResponse] = await Promise.all([
     phone.keyboard.press('Enter'),
     phone.waitForResponse(response => new URL(response.url()).pathname === '/api/session/page', { timeout: CLIENT_TIMEOUT_MS }),
@@ -316,6 +372,10 @@ try {
     turnText(50), { timeout: CLIENT_TIMEOUT_MS })
   await settleFrames(phone)
   await waitForQuietScroll(phone)
+  const keyboardAfter = await scrollMetrics(phone)
+  const keyboardAdded = keyboardAfter.height - keyboardBefore.height
+  assert(Math.abs((keyboardAfter.top - keyboardBefore.top) - keyboardAdded) <= 12,
+    `keyboard page prepend did not preserve viewport position: ${JSON.stringify({ keyboardBefore, keyboardAfter, keyboardAdded })}`)
   assert.equal(pageRequests.length, 2, 'keyboard page compensation chained another request')
 
   const [, thirdResponse] = await Promise.all([
@@ -334,7 +394,7 @@ try {
   assert.equal(promptRequests, 0, 'history smoke attempted a model prompt')
   const summary = { seededTurns, noInputRequests, pageRequests: pageRequests.length,
     busyBox, enabledBox, beforeCommit, afterCommit, addedHeight, beforeMulti, afterMulti, loaderBox, touchTrace, promptRequests }
-  console.log('Packed DSH history smoke passed: three real older pages, stable viewport, no chained load, two-contact no-spurious-load/quiet expiry, keyboard and pointer loader.')
+  console.log('Packed DSH history smoke passed: gesture-settled clicks (no mid-drag request), zone-exit cancel, pending-page second gesture, three real older pages, stable viewport, no chained load, two-contact no-spurious-load/quiet expiry, keyboard and pointer loader.')
   console.log(JSON.stringify(summary))
 } catch (error) {
   failure = new Error(`${sanitized(error instanceof Error ? error.stack ?? error.message : String(error))}\n${dsh?.logs() ?? ''}`)

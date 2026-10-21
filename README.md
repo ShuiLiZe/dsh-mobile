@@ -26,13 +26,13 @@
   <a href="#兼容性">兼容性</a> ·
   <a href="docs/README.md">文档</a> ·
   <a href="#贡献者">贡献者</a> ·
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.13">更新记录</a> ·
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14">更新记录</a> ·
   <a href="README.en.md">English</a>
 </p>
 
 > DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **当前正式版本：0.6.13**。区分网关 HTTP 接收超时与请求头过大错误，增加隐私受限的拒绝诊断，并补充图文发送失败回归。Android App **0.6.5** 保持不变，无需同步升级。[更新与下载](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.13) · [完整更新记录](CHANGELOG.md)。
+> **当前正式版本：0.6.14**。改善历史消息加载手势与侧栏入口共存，支持自有反向代理的 IPv6 回环／ULA 后端。Android App **0.6.5** 保持不变，无需同步升级。[更新与下载](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14) · [完整更新记录](CHANGELOG.md)。
 >
 > **版本说明**：自插件 **0.6.2** 起，Android App 与插件独立编号、独立发布，版本号无需一致；插件升级不代表 App 需要同步升级。[兼容说明](#兼容性)。
 
@@ -128,6 +128,8 @@ dsh plugin --profile web add dshmarket
 3. 在 Android App 中进入 **局域网访问**，扫描发现电脑并点击设备，再扫描二维码或粘贴配对密钥。
 4. 配对完成后会建立持久设备信任。以后打开 App 会自动发现并连接，切换 Wi-Fi、热点或 DHCP 地址通常不需要重新配对。
 
+侧栏底部有其他插件入口时，**移动访问**会收起为手机图标；悬停可查看名称，点击仍打开原面板。独占该区域时恢复文字显示。
+
 端口说明：`dsh web --port` 修改 DSH Web 上游端口（默认 3080），插件会自动跟随；`dsh-mobile setup --port` 修改 Mobile HTTPS 监听端口（默认 3443），配对二维码会包含实际端口。
 
 <details>
@@ -181,7 +183,7 @@ dsh plugin --profile web add dshmarket
    - **Tailscale Funnel**：点击 **启用远程访问**，在打开的官方页面完成一次 Tailscale 登录；按面板提示继续允许 Funnel，然后返回 DSH 等待连接就绪。
    - **cpolar**：点击 **安装官方组件**，登录 cpolar 控制台取得 Authtoken，粘贴后点击 **保存并连接**。组件只会在确认后下载到插件私有目录；免费临时地址可能在 DSH 或 cpolar 重启后变化。
    - **自建 FRP（高级）**：已有 VPS 时，展开 **自建连接**，填写 frps 信息和公开 HTTPS 域名或真实公网 IPv4。可以复制受限的 frps + Caddy 模板手动部署，也可以在 Ubuntu/Debian + systemd 上用 SSH 密钥一键部署；不支持密码登录。已有自定义 Caddy 站点时，请按指南手动部署并合并 import。部署或清理前须到 VPS 控制台核对主机指纹。本机 `frpc` 按需下载校验，VPS 需单独清理。需要 Android App 0.3.3 或更新版本；证书、端口和操作步骤见 [自建 FRP 使用指南](docs/SELF_HOSTED_FRP.md)。
-   - **自有反向代理**：展开 **自建连接 → 自有反向代理**，填写公网 HTTPS 地址（支持自定义端口）、私有监听 IPv4、独立 HTTP 后端端口（默认 3444）和代理来源 CIDR，再点击 **保存并启动后端**。适合已有 Lucky/Nginx/Caddy 的用户，无需隧道组件；需要 Android App 0.4.0 或更高版本。详见 [自有反向代理指南](docs/SELF_HOSTED_ORIGIN.md)。
+   - **自有反向代理**：展开 **自建连接 → 自有反向代理**，填写公网 HTTPS 地址（支持自定义端口）、私有监听 IP（IPv4 或 IPv6 回环/ULA）、独立 HTTP 后端端口（默认 3444）和代理直连来源 CIDR，再点击 **保存并启动后端**。适合已有 Lucky/Nginx/Caddy 的用户，无需隧道组件；需要 Android App 0.4.0 或更高版本。详见 [自有反向代理指南](docs/SELF_HOSTED_ORIGIN.md)。
    - **托管 Caddy**：在 **自建连接 → 自有反向代理** 中选择 **托管 Caddy**，点击 **安装托管 Caddy** 并确认下载。填写公网 HTTPS 地址、腾讯云 DNSPod 凭据和本机 HTTPS 监听端口，再点击 **保存并启动 Caddy**。需要域名和可达的公网入站，不会替你穿透 CGNAT；端口映射与完整步骤见 [托管 Caddy 指南](docs/CADDY_MANAGED.md)。
    - **cloudflared 快速隧道**：点击 **安装官方组件**，插件在确认后从官方发布页下载固定版本到插件私有目录，随后自动申请一个临时公网地址（quick tunnel），**无需注册或登录**。适合不想注册账号的用户；quick tunnel 地址每次重连都会变化，官方定位为测试用途、有限流且无可用性保证，请勿用于必须长期可达的生产访问，只适合临时或验证场景。
    - **cloudflared 命名隧道**：已有 Cloudflare 账号和域名时，把隧道类型切到 **命名隧道**，填入连接器令牌、公网域名与本机转发端口，即可获得重启后不变的固定地址（令牌只存私有目录、只经环境变量传给 cloudflared）。步骤见 [Cloudflare 命名隧道](docs/CLOUDFLARE_TUNNEL.md)。
@@ -202,6 +204,10 @@ Funnel 的运行组件把公开监听生命周期绑定到父进程和受限控�
 各通道的系统和组件支持范围见[兼容性](#兼容性)。本机托管的程序、凭据与配置可从面板清理；VPS 上的文件必须按对应指南单独清理。
 
 </details>
+
+### 实验中的 iroh 连接
+
+[dsh-mobile-iroh](https://github.com/saya-ch/dsh-mobile-iroh) 正在独立开发，探索通过 iroh 连接电脑，并沿用 DSH Mobile 的配对、设备列表和 WebView 体验。目前本地开发候选已接通 Rust 传输与 Android，并通过本地 QUIC／HTTPS／WSS 验证和 Android 构建；尚未并入本插件或正式发布，电脑端操作界面、自动证书配置与真机跨网验收仍待完成。它还不是当前正式 App 可选的连接方式。
 
 ## 扩展与自定义
 
@@ -340,7 +346,7 @@ Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏�
 
 **旧内核限制**：API 兼容实现不能修复内核无法解析的 JavaScript 语法。DSH **0.2.1-rc.2** 的正式前端包含 class static blocks，Chromium **92** 无法解析；该语法从 Chrome 94 默认可用，但这不代表 94 已通过整个 DSH 的兼容验收。[V8 说明](https://v8.dev/blog/v8-release-94)。App 的“内核低于 100”提醒只是建议，点击继续不代表当前 DSH 可以运行。若系统 WebView 无法更新，可使用已确认正常的手机浏览器访问电脑端提供的移动地址，无需清除原有 App 配对。
 
-插件 **0.6.13** 在保留 0.6.12 兼容层和启动反馈的基础上，区分网关接收超时与请求头过大，并增加图文发送失败的打包回归。它不转译 DSH、不修改 DSH 源码，也不自动重发消息；华为 Chromium 92 的实际 App 尚未完成验收。反馈问题时请提供 DSH／插件／App 与 WebView 版本、进入方式和脱敏后的首个控制台错误，不要发送令牌或完整配对地址。
+当前插件保留 0.6.12 的兼容层和启动反馈，以及 0.6.13 的网关接收超时／请求头过大分类与图文发送失败回归。它不转译 DSH、不修改 DSH 源码，也不自动重发消息；华为 Chromium 92 的实际 App 尚未完成验收。反馈问题时请提供 DSH／插件／App 与 WebView 版本、进入方式和脱敏后的首个控制台错误，不要发送令牌或完整配对地址。
 
 > **社区客户端（非官方）**：[微信小程序客户端](https://github.com/StrawberryAO/dsh-mobile-minapp)
 > 原生微信小程序实现，复用「移动访问」的配对与 Remote 流协议（需 dsh-mobile ≥ 0.3.8）。

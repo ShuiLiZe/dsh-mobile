@@ -27,15 +27,15 @@ Replace these examples with your own addresses:
 | Field | Proxy on the DSH computer | Proxy on another private-network host |
 | --- | --- | --- |
 | Public HTTPS origin | `https://phone.example.com:8815` | `https://phone.example.com:8815` |
-| Private listen IPv4 | `127.0.0.1` | DSH computer's address, e.g. `192.168.50.10` |
+| Private listen IP | `127.0.0.1` or `::1` | DSH computer's private address, e.g. `192.168.50.10` or `fd12:3456:789a::10` |
 | HTTP backend port | `3444` | `3444` |
-| Allowed proxy source CIDR | `127.0.0.0/8` | Actual proxy source, e.g. `192.168.50.1/32` |
+| Allowed proxy source CIDR | `127.0.0.0/8` for IPv4; `::1/128` for IPv6 | Actual proxy source, e.g. `192.168.50.1/32` or `fd12:3456:789a::1/128` |
 
-The public origin must be HTTPS and may include a custom port, but no path, credentials, query or fragment. Private/reserved public addresses, local names and IPv6 literals are rejected by this provider.
+The public origin must be HTTPS and may include a custom port, but no path, credentials, query or fragment. Domains may use A/AAAA records for IPv4, IPv6 or dual-stack access. Private/reserved addresses, local names and IPv6 literals are rejected in the public-origin field.
 
-Bind to an explicit loopback or RFC1918 IPv4 already assigned to the DSH computer, not `0.0.0.0`, a hostname, public IP or IPv6. Choose an unused integer port from 1024–65535, excluding reserved 3080 and 3443. Default 3444 is also the named-cloudflared forward port: only one remote provider runs at a time, but verify the port is released during a switch.
+Bind to an explicit loopback, RFC1918 IPv4 or IPv6 ULA (`fc00::/7`) already assigned to the DSH computer. Enter IPv6 as a bare address such as `::1`, without brackets, port or zone ID; displayed backend URLs add the required brackets, e.g. `http://[::1]:3444`. Wildcards `0.0.0.0`/`::`, hostnames, public IPs and IPv6 link-local addresses are rejected. Choose an unused integer port from 1024–65535, excluding reserved 3080 and 3443. Default 3444 is also the named-cloudflared forward port: only one remote provider runs at a time, but verify the port is released during a switch.
 
-CIDRs match the proxy's **direct TCP peer**, not the phone or `X-Forwarded-For` / `X-Real-IP` / `Forwarded`. Docker or NAT may change that peer. Prefer the actual single-host /32, not an entire subnet. Up to 16 canonical private/loopback CIDRs are accepted, separated by spaces or commas; explicit private proxy sources are required for a LAN bind.
+CIDRs match the proxy's **direct TCP peer**, not the phone or `X-Forwarded-For` / `X-Real-IP` / `Forwarded`. Docker or NAT may change that peer. Prefer an actual single-host IPv4 /32 or IPv6 /128. Up to 16 private/loopback CIDRs are accepted, separated by spaces or commas; each must use the listener's IP family and have no host bits set. Explicit private proxy sources are required for a private-network bind; `::/0` is rejected.
 
 Phones behind a proxy may share that direct peer. From plugin 0.6.12, invalid credentials still share its failure budget, but anonymous failures cannot exhaust a valid one-time pairing secret's admission. Authenticated renewals and probes have per-device limits and bounded pending work. Adding or trusting forwarded-IP headers is unnecessary. For `429 rate_limited` on older versions, update the plugin while retaining pairings; do not widen source CIDRs or expose the ordinary DSH listener.
 
@@ -52,6 +52,34 @@ Select **Save and start backend**. An active backend reloads its settings. The p
 [Lucky's official Web documentation](https://www.lucky666.cn/docs/modules/web/) describes WebSocket support. UI labels vary by version, but this backend requires the incoming external Host. Do not enable target-address Host; if a version offers custom Host, provide the full public hostname and port. Certificates belong on Lucky, not this HTTP backend.
 
 For a separate proxy host, configure routing and a firewall rule limited to its actual private source yourself. This provider does not change the firewall.
+
+### Nginx and IPv6
+
+The phone's public IPv6 connection to Nginx and Nginx's HTTP connection to DSH Mobile are separate connections. **An IPv6 public entry does not require an IPv6 backend.** On the same computer, Nginx can accept public IPv6 and forward to `http://127.0.0.1:3444`; the source CIDR remains IPv4 loopback. For an explicit `::1` backend, use `http://[::1]:3444` and `::1/128` instead.
+
+In an existing Nginx HTTPS site with its certificate configured, preserve the external Host and WebSocket upgrade headers:
+
+```nginx
+# In the http block; reuse an existing map when already defined.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# In the corresponding HTTPS server block.
+location / {
+    proxy_pass http://127.0.0.1:3444;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+}
+```
+
+`$http_host` preserves a non-default port from the phone's request; do not replace it with the backend address. See [Nginx WebSocket documentation](https://nginx.org/en/docs/http/websocket.html) and [request-header settings](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header). You still configure public AAAA records, the Nginx IPv6 HTTPS listener, certificates and firewall.
+
+When Nginx and DSH run on separate machines connected only through the Internet, do not expose this plain HTTP backend publicly. Establish a trusted private/VPN link first, then use its private IPv4/ULA address and the proxy's actual source CIDR. A public IPv6 address alone does not provide that private link.
 
 ## State and phone verification
 
@@ -82,7 +110,7 @@ Under the default `$DSH_HOME/mobile-access/` root, settings are in `remote/origi
 | Symptom | First check |
 | --- | --- |
 | Port occupied | Choose an unused backend port and update the proxy target |
-| Listen address unavailable | Use a private IPv4 assigned to the DSH computer, not the proxy host |
+| Listen address unavailable | Use loopback, private IPv4 or ULA assigned to the DSH computer, not the proxy host; public IPv6 access does not imply a local ULA exists |
 | Refused / HTTP 403 | Verify direct source CIDR, full external Host and HTTPS Origin; forwarded headers cannot bypass them |
 | Page works but real-time operations fail | Check WebSocket forwarding, timeout and approved paths without disabling trust checks |
 | Only Backend listening | Expected local state; verify public DNS, HTTPS routing, certificate and actual phone access |

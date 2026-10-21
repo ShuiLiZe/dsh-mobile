@@ -1,0 +1,74 @@
+name: 问题反馈 / Bug report
+description: 描述具体异常、版本和复现步骤，帮助定位问题。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请将一个可复现的问题写在一条 issue 中。说明具体哪里异常，不要只写“有问题”或“问题较多”。
+        DSH Mobile 提供远程访问和通用移动适配；第三方插件或皮肤的兼容需求请注明名称，并提供启用/停用的对照结果。
+        Please describe one concrete problem, your versions, and how to reproduce it. For third-party plugins or skins, include their names and compare with them disabled.
+        请勿提交配对码、Token、Cookie、完整二维码链接、API Key 或私人对话。 / Do not include pairing secrets, cookies, API keys, or private conversations.
+  - type: textarea
+    id: versions
+    attributes:
+      label: 使用环境 / Environment
+      description: 插件与 App 版本独立；没有使用 App 的项目请写“不适用”。
+      placeholder: |
+        DSH 版本、CLI / 官方 Desktop / 社区 Desktop：
+        dsh-mobile 插件版本：
+        Android App 版本（如使用）：
+        电脑系统、手机型号 / Android、浏览器 / WebView 版本：
+    validations:
+      required: true
+  - type: dropdown
+    id: entry
+    attributes:
+      label: 出问题的入口 / Affected entry
+      options:
+        - 电脑端移动访问面板 / Computer Mobile Access panel
+        - Android App
+        - 手机浏览器 / Mobile browser
+        - 电脑浏览器远程入口 / Remote entry in a computer browser
+        - 其他（在复现步骤中说明）/ Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: connection
+    attributes:
+      label: 连接方式 / Connection type
+      description: 例如局域网、Cloudflare 命名通道/快速隧道、cpolar、Tailscale、FRP、自备反代；面板问题可写不适用。
+  - type: textarea
+    id: actual
+    attributes:
+      label: 具体异常 / What happens
+      description: 指出异常位置、错误文字和受影响操作。附图请标注位置，避免让维护者猜测。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果 / Expected behavior
+      description: 说明你希望出现什么行为，与实际结果有何区别。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1. 从哪个入口打开……
+        2. 进行什么操作……
+        3. 出现什么异常……
+        每次出现，还是偶尔出现？
+    validations:
+      required: true
+  - type: textarea
+    id: comparisons
+    attributes:
+      label: 第三方插件与对照结果 / Plugins and comparison
+      description: 布局问题请列出皮肤和相关前端插件的名称/版本，说明停用后是否仍出现。无需卸载插件或清除配对数据。
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏日志或连接诊断 / Redacted diagnostics
+      description: 如有，请粘贴同一故障时段的报错或“移动访问 → 连接诊断”结果。截图不能替代复现步骤。

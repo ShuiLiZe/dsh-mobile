@@ -13,8 +13,9 @@ import { CLIENT_TIMEOUT_MS, createMobileProfile, dismissOnboarding, launchDsh, o
   pairMobilePage, removeTemporaryRoot, sanitized } from './mobile-boot-fixture.mjs'
 
 const args = process.argv.slice(2)
-assert(args.length === 0 || args.length === 1 && args[0] === '--negative-control-drawer', 'Unexpected sidebar smoke arguments')
+assert(args.length === 0 || args.length === 1 && ['--negative-control-drawer', '--footer-only'].includes(args[0]), 'Unexpected sidebar smoke arguments')
 const negative = args.includes('--negative-control-drawer')
+const footerOnly = args.includes('--footer-only')
 const marker = 'Mobile sidebar scroll ownership negative control detected'
 const repository = fileURLToPath(new URL('..', import.meta.url))
 const dshBin = process.env.DSH_BOOT_SMOKE_BIN
@@ -34,13 +35,13 @@ let browser, dsh, phone, bootDiagnostics, stage = 'installation', observedNegati
 // No stock rows, handlers or styles are copied into this fixture.
 const fixtureClient = `window.__ModuleLoader__.load({id:${JSON.stringify(fixtureName)},factory:require=>{
  const {createElement:h,useState,useEffect}=require('react');
- const state={long:true,overlay:false,clicks:[]};window.__sidebarFixture=state;
+ const state={long:true,footerMode:'long',overlay:false,clicks:[]};window.__sidebarFixture=state;
  function useFixture(){const [revision,setRevision]=useState(0);useEffect(()=>{const update=()=>setRevision(value=>value+1);window.addEventListener('sidebar-fixture-update',update);return()=>window.removeEventListener('sidebar-fixture-update',update)},[]);return state}
  const update=()=>window.dispatchEvent(new Event('sidebar-fixture-update'));
- function Footer({wide}){const current=useFixture();return h('div',{'data-sidebar-fixture-footer':true,style:{width:'100%',minHeight:wide&&current.long?280:48,display:'flex',flexDirection:'column',justifyContent:'flex-end'}},h('button',{id:'sidebar-fixture-footer',style:{font:'inherit',minHeight:48,width:'100%'},onClick:()=>{state.clicks.push('footer');state.overlay=true;update()}},'Owned footer action'))}
+ function Footer({wide}){const current=useFixture();if(current.footerMode==='hidden')return null;if(current.footerMode==='shared')return wide?h('div',{'data-sidebar-fixture-shared':true,style:{position:'relative',display:'flex',minWidth:0,width:'100%'}},h('button',{id:'sidebar-fixture-shared',style:{boxSizing:'border-box',width:'100%',minWidth:0,height:42,display:'flex',alignItems:'center',gap:8,padding:'0 6px 0 8px',border:0,background:'transparent',color:'inherit',font:'14px/22px system-ui',whiteSpace:'nowrap'},onClick:()=>state.clicks.push('shared')},h('span',null,'Balance'),h('span',{'data-sidebar-fixture-amount':true,style:{marginLeft:'auto',flex:'none'}},'310.13 CNY'))):null;return h('div',{'data-sidebar-fixture-footer':true,style:{width:'100%',minHeight:wide&&current.long?280:48,display:'flex',flexDirection:'column',justifyContent:'flex-end'}},h('button',{id:'sidebar-fixture-footer',style:{font:'inherit',minHeight:48,width:'100%'},onClick:()=>{state.clicks.push('footer');state.overlay=true;update()}},'Owned footer action'))}
  function Overlay(){const current=useFixture();return current.overlay?h('div',{id:'sidebar-fixture-dialog',role:'dialog','aria-label':'Owned sidebar overlay',style:{position:'fixed',inset:'72px 16px auto',padding:16,zIndex:1200,background:'var(--dsw-alias-bg-base)',color:'var(--dsw-alias-label-primary)'}},h('button',{id:'sidebar-fixture-close',style:{minWidth:48,minHeight:48},onClick:()=>{state.clicks.push('overlay');state.overlay=false;update()}},'Close owned overlay')):null}
  function Stop(){return h('button',{id:'sidebar-fixture-stop',style:{minWidth:44,minHeight:44},onClick:()=>state.clicks.push('stop')},'Owned Stop control')}
- function apply(ctx){ctx.effect(()=>{const off=[];state.setLong=value=>{state.long=value;update()};state.hasSession=id=>ctx.sessions.list.getSnapshot().byId[id]!==undefined;state.openSession=id=>ctx.uiWorkspace.openSession(id);
+ function apply(ctx){ctx.effect(()=>{const off=[];state.setLong=value=>{state.long=value;update()};state.setFooterMode=value=>{state.footerMode=value;update()};state.hasSession=id=>ctx.sessions.list.getSnapshot().byId[id]!==undefined;state.openSession=id=>ctx.uiWorkspace.openSession(id);
  for(const [name,id,component] of [['sidebar.footer.action','sidebar-fixture-footer',Footer],['shell.overlay','sidebar-fixture-overlay',Overlay],['conversation.input.right','sidebar-fixture-stop',Stop]])off.push(ctx.slots.inject(name,()=>ctx.slots.register({name,id},component)));
  for(let i=0;i<5;i++){const id='sidebar-fixture-panel-'+i;off.push(ctx.slots.inject('sidebar.panellist',()=>ctx.slots.register({name:'sidebar.panellist',id,label:'Owned panel '+i},()=>h('span',null,'P'))));off.push(ctx.slots.inject('main',()=>ctx.slots.register({name:'main',key:id},()=>h('div',{'data-sidebar-fixture-panel':id},'Owned panel '+i))))}
  return()=>{off.reverse().forEach(dispose=>dispose());delete window.__sidebarFixture}})}return{inject:['slots','uiWorkspace','sessions'],apply};}});`
@@ -182,6 +183,70 @@ async function removeDrawerOwnership() {
   })
 }
 
+async function checkDesktopFooter(page) {
+  await page.locator('.dsh-mobile-control__trigger').waitFor({ state: 'visible', timeout: CLIENT_TIMEOUT_MS })
+  await page.waitForFunction(() => typeof window.__sidebarFixture?.setFooterMode === 'function')
+  await dismissOnboarding(page)
+  const trigger = page.locator('.dsh-mobile-control__trigger')
+  const shared = page.locator('#sidebar-fixture-shared')
+  // The public slot fixture stresses an adjacent full-width root. It does not
+  // run a community plugin's account/Host code or change the shell's layout.
+  record.desktopFooter = []
+  try {
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+      for (const mode of ['hidden', 'shared', 'hidden']) {
+        await page.evaluate(mode => window.__sidebarFixture.setFooterMode(mode), mode)
+        await frames(page)
+        const value = await trigger.evaluate(node => {
+          const rect = node.getBoundingClientRect(), label = node.querySelector('.dsh-mobile-control__trigger-label')
+          const outlet = node.closest('[data-slot="sidebar.footer.action"]'), row = outlet.parentElement
+          const bounds = row.getBoundingClientRect(), hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          const amount = document.querySelector('[data-sidebar-fixture-amount]')?.getBoundingClientRect()
+          return { width: rect.width, height: rect.height, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, rowLeft: bounds.left, rowRight: bounds.right,
+            rowDirection: getComputedStyle(row).flexDirection, hit: hit === node || node.contains(hit),
+            covering: typeof hit?.className === 'string' ? hit.className : hit?.tagName,
+            name: node.getAttribute('aria-label'), title: node.title, labelDisplay: getComputedStyle(label).display,
+            amountRight: amount?.right }
+        })
+        record.desktopFooter.push({ colorScheme, mode, ...value })
+        await page.screenshot({ path: join(evidence, `desktop-footer-${colorScheme}-${mode}.png`) })
+        assert(value.height >= 42 && value.hit, `Desktop ${mode}: Mobile target was shrunk or covered ${JSON.stringify(value)}`)
+        assert.equal(value.name, 'Mobile access'); assert.equal(value.title, 'Mobile access')
+        assert.equal(value.rowDirection, 'row', 'Mobile changed the shared footer orientation')
+        if (mode === 'shared') {
+          assert(value.amountRight <= value.rowRight + 1, `Adjacent amount clipped ${JSON.stringify(value)}`)
+          assert.equal(value.width, 44, 'Mobile did not reserve its compact shared-row target')
+          assert.equal(value.labelDisplay, 'none', 'Compact Mobile label was squeezed instead of hidden')
+          await shared.click()
+          assert.equal(await page.evaluate(() => window.__sidebarFixture.clicks.at(-1)), 'shared')
+        } else {
+          assert(value.width > 100 && value.labelDisplay !== 'none', 'Lone Mobile action did not restore its full label')
+        }
+        await trigger.click()
+        await page.locator('.dsh-mobile-control__panel').waitFor({ state: 'visible' })
+        await page.locator('.dsh-mobile-control__close').click()
+        await page.locator('.dsh-mobile-control__panel').waitFor({ state: 'hidden' })
+      }
+    }
+    await page.setViewportSize({ width: 1000, height: 800 })
+    await page.waitForFunction(() => document.querySelector('.dsh-mobile-control__trigger')?.classList.contains('is-rail'))
+    const rail = await trigger.evaluate(node => {
+      const rect = node.getBoundingClientRect(), hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+      return { width: rect.width, height: rect.height, hit: node === hit || node.contains(hit) }
+    })
+    assert(rail.width === 36 && rail.height === 36 && rail.hit, `Collapsed rail target changed ${JSON.stringify(rail)}`)
+    await trigger.click()
+    await page.locator('.dsh-mobile-control__panel').waitFor({ state: 'visible' })
+    await page.locator('.dsh-mobile-control__close').click()
+    record.desktopFooter.push({ mode: 'rail', ...rail })
+    record.checks.push('Desktop lone/shared/lone footer in light/dark: Mobile and adjacent action hit targets, amount containment, retained public row direction')
+  } finally {
+    await page.evaluate(() => window.__sidebarFixture.setFooterMode('long'))
+    await page.setViewportSize({ width: 1280, height: 900 })
+  }
+}
+
 try {
   await mkdir(evidence, { recursive: true })
   record.tarballSha256 = createHash('sha256').update(await readFile(tarball)).digest('hex')
@@ -197,6 +262,9 @@ try {
   const launchUrl = await dsh.ready()
   const pairUrl = await openPairing(desktop, launchUrl, dsh.logs)
   console.log('Owned DSH desktop and Mobile Gateway are ready.')
+  stage = 'desktop-footer'
+  await checkDesktopFooter(desktop)
+  if (!footerOnly) {
   const workspace = await rpc(desktop, 'workspace/create', { path: workspacePath })
   const sessions = []
   for (let index = 0; index < 12; index++) {
@@ -326,6 +394,7 @@ try {
   assert.deepEqual(desktopAfter, desktopBefore, 'Mobile changes altered desktop frame geometry/hit policy')
   assert.equal(record.prompts, 0, 'Sidebar smoke attempted a model request')
   assert.deepEqual(record.errors, [], 'Sidebar smoke emitted a page error')
+  }
   record.completed = true
   stage = 'completed'
 } catch (error) {

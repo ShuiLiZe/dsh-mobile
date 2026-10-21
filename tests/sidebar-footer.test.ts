@@ -198,6 +198,18 @@ describe('desktop Mobile Access footer', () => {
     expect(CONTROL_STYLES).not.toContain('.dsh-mobile-control__trigger-icon::after')
   })
 
+  it('reserves an icon target when another footer entry shares the row', () => {
+    expect(declarations('.dsh-mobile-control__trigger:not(.is-rail):not(:only-child)')).toEqual({
+      flex: '0 0 44px',
+      width: '44px',
+      'min-width': '44px',
+      padding: '0',
+      'justify-content': 'center',
+      gap: '0',
+    })
+    expect(declarations('.dsh-mobile-control__trigger:not(.is-rail):not(:only-child) .dsh-mobile-control__trigger-label')).toEqual({ display: 'none' })
+  })
+
   it.each([
     ['en-US', 'Mobile access'],
     ['zh-CN', '移动访问'],

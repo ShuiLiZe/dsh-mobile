@@ -1,0 +1,27 @@
+name: 功能或兼容建议 / Feature request
+description: 说明使用场景、现有行为和希望改进的结果。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提出建议。请说明实际场景和期望结果；提交建议不代表项目承诺实现或确定发布时间。
+        For compatibility requests, name the third-party plugin or skin and describe the specific behavior you need.
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景与现有问题 / Use case and current behavior
+      description: 你在什么情况下遇到什么不便？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望实现的结果 / Desired outcome
+      description: 请描述可以观察到的行为，而不只写“希望兼容”或“优化一下”。
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 相关版本、插件和补充资料 / Versions, plugins and context
+      description: 兼容需求请列出 DSH、dsh-mobile、第三方插件/皮肤名称与版本，可提供公开仓库链接。请勿提交任何凭据。
