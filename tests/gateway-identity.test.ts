@@ -55,7 +55,8 @@ describe('gateway installation identity', () => {
   it('retains certificate pins and explicit operator identities', () => {
     const base = template()
     const certificateBound = { ...base, pairingCaFile: join(tmpdir(), 'fixture-ca.pem'), instanceId: 'c'.repeat(64) }
-    expect(withInstallationIdentity(certificateBound, 'a'.repeat(64), false)).toBe(certificateBound)
-    expect(withInstallationIdentity(base, 'a'.repeat(64), true)).toBe(base)
+    expect(withInstallationIdentity(certificateBound, 'a'.repeat(64), false)).toEqual({ ...certificateBound, installationId: 'a'.repeat(64) })
+    expect(withInstallationIdentity(base, 'a'.repeat(64), true)).toEqual({ ...base, installationId: 'a'.repeat(64) })
+    expect(base).not.toHaveProperty('installationId')
   })
 })

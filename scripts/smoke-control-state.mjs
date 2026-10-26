@@ -77,6 +77,12 @@ async function withControl(browser, name, options, run) {
     state.remote.providers.origin.component.installed = options.caddyInstalled !== false
     state.remote.providers.origin.component.supported = options.caddySupported !== false
   }
+  if (options.frpFixture) {
+    state.remote.providers.frp = {
+      component: { installed: options.frpInstalled !== false, supported: true },
+      configuration: { configured: false, proxyName: 'dsh-mobile-frp-feedback-fixture' },
+    }
+  }
   let closing = false
   let context
   const json = (response, status, body) => {
@@ -150,6 +156,14 @@ async function withControl(browser, name, options, run) {
         state.remote.origin = body.settings.publicOrigin
         state.remote.caddyState = { enabled: true, state: 'ready' }
       }
+      json(response, 200, state.remote)
+      return
+    }
+    if (pathname === `${prefix}/remote/frp/configure` && request.method === 'POST') {
+      if (state.frpConfigureError !== undefined) { json(response, 400, { error: state.frpConfigureError }); return }
+      if (state.holdFrpConfigure) { hold(entry, response); return }
+      const { token: _token, ...safe } = body
+      state.remote.providers.frp.configuration = { configured: true, ...safe, proxyName: 'dsh-mobile-frp-feedback-fixture' }
       json(response, 200, state.remote)
       return
     }
@@ -314,6 +328,135 @@ async function withControl(browser, name, options, run) {
 const browser = await chromium.launch({ headless: true })
 let cases = 0
 try {
+  for (const language of ['en', 'it', 'zh']) {
+    await withControl(browser, `FRP field validation ${language}`, {
+      layoutFixture: true, frpFixture: true, language, width: 360,
+      locale: language === 'zh' ? 'zh-CN' : language === 'it' ? 'it-IT' : 'en-US',
+    }, async ({ page, state, count, waitRequest, consumed, settle, openRemote }) => {
+      if (language === 'zh') await page.evaluate(() => {
+        document.documentElement.style.colorScheme = 'dark'
+        for (const [name, value] of Object.entries({
+          '--dsw-alias-bg-layer-1': '#202225', '--dsw-alias-bg-layer-2': '#292b30',
+          '--dsw-alias-label-primary': '#f2f3f5', '--dsw-alias-label-secondary': '#b9bdc6',
+          '--dsw-alias-border-l2': '#454850', '--dsw-alias-border-l3': '#60646d',
+          '--dsw-alias-state-error-primary': '#ff9494',
+        })) document.documentElement.style.setProperty(name, value)
+      })
+      await openRemote()
+      await page.locator('.dsh-mobile-control__self-hosted').evaluate(node => { node.open = true })
+      const previous = await consumed(`${prefix}/remote/provider`)
+      await page.locator('.dsh-mobile-control__provider.is-frp').click()
+      await settle(`${prefix}/remote/provider`, previous)
+      const field = name => page.locator(`#dsh-mobile-frp-${name}`)
+      const configure = page.locator('.dsh-mobile-control__frp-setup .dsh-mobile-control__primary').last()
+      const postPath = `${prefix}/remote/frp/configure`
+      await field('serverAddress').fill('https://frp.example.com:7000')
+      await field('serverPort').fill('0')
+      await field('token').fill('short')
+      await field('publicOrigin').fill('1.2.3.4:33080')
+      await configure.click()
+      assert.equal(count('POST', postPath), 0, 'Invalid fields issued a configure request')
+      assert.equal(await field('serverAddress').evaluate(node => document.activeElement === node), true, 'First invalid field was not focused')
+      for (const name of ['serverAddress', 'serverPort', 'token', 'publicOrigin']) {
+        assert.equal(await field(name).getAttribute('aria-invalid'), 'true')
+        const error = page.locator(`#dsh-mobile-frp-${name}-error`)
+        assert.equal(await error.isVisible(), true, `${name}: inline error is not visible`)
+        assert((await error.textContent()).length > 15, `${name}: error has no specific guidance`)
+        assert((await field(name).getAttribute('aria-describedby')).includes(`dsh-mobile-frp-${name}-error`))
+      }
+      const screenshots = process.env.DSH_CONTROL_LAYOUT_SCREENSHOT_DIR
+      if (screenshots !== undefined) {
+        await mkdir(screenshots, { recursive: true })
+        await page.screenshot({ path: resolve(screenshots, `frp-validation-${language}.png`) })
+      }
+      await field('serverAddress').fill('frp.example.com')
+      await field('serverPort').fill('7000')
+      await field('token').fill('fixture-token-not-a-secret-012345')
+      await field('publicOrigin').fill('https://1.2.3.4')
+      assert.equal(await page.locator('.dsh-mobile-control__frp-fields [aria-invalid=true]').count(), 0, 'Corrected fields kept errors')
+      await field('mode').selectOption('attach')
+      await configure.click()
+      assert.equal(await field('vhostHttpPort').getAttribute('aria-invalid'), 'true')
+      await field('entryTls').selectOption('self-signed')
+      assert.equal(await field('vhostHttpPort').getAttribute('aria-invalid'), null, 'Hidden vhost field kept a stale error')
+      await field('publicPort').fill('3443')
+      await field('publicOrigin').fill('https://1.2.3.4:33080')
+      await configure.click()
+      assert.equal(count('POST', postPath), 0)
+      assert.equal(await field('publicOrigin').evaluate(node => document.activeElement === node), true)
+      assert.equal(await field('publicPort').getAttribute('aria-invalid'), 'true')
+      assert((await page.locator('#dsh-mobile-frp-publicOrigin-error').textContent()).includes('https://'))
+      await field('publicOrigin').fill('http://1.2.3.4')
+      await configure.click()
+      assert.equal(count('POST', postPath), 0, 'HTTP origin was accepted')
+      await field('entryTls').selectOption('public-ip-cert')
+      await field('vhostHttpPort').fill('0')
+      await configure.click()
+      assert.equal(await field('vhostHttpPort').getAttribute('aria-invalid'), 'true', 'Invalid vhost port became a default')
+      assert.equal(await field('publicPort').getAttribute('aria-invalid'), null, 'Hidden public port retained an error')
+      await field('vhostHttpPort').fill('7080')
+      await field('entryTls').selectOption('self-signed')
+      await field('publicOrigin').fill('https://1.2.3.4')
+      await field('publicPort').fill('33080')
+      state.frpConfigureError = 'frp_public_origin_invalid'
+      const rejected = await consumed(postPath)
+      await configure.click()
+      await settle(postPath, rejected)
+      assert.equal(count('POST', postPath), 1)
+      assert.equal(await field('publicOrigin').getAttribute('aria-invalid'), 'true', 'Host validation error did not identify its field')
+      state.frpConfigureError = undefined
+      await field('publicOrigin').fill('https://1.2.3.4/')
+      const accepted = await consumed(postPath)
+      await configure.click()
+      await settle(postPath, accepted)
+      assert.equal(count('POST', postPath), 2)
+      assert.equal(await page.locator('.dsh-mobile-control__frp-fields [aria-invalid=true]').count(), 0)
+      assert.equal(await field('publicOrigin').locator('..').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Field feedback overflowed the narrow panel')
+      await field('publicPort').fill('3443')
+      await field('entryTls').selectOption('public-ip-cert')
+      await field('token').fill('fixture-token-not-a-secret-012345')
+      state.holdFrpConfigure = true
+      const publicCa = await consumed(postPath)
+      await configure.click()
+      const held = await waitRequest('POST', postPath, 2)
+      assert.equal(await configure.isDisabled(), true)
+      assert.equal(await page.locator('#dsh-mobile-frp-action-hint').isVisible(), true, 'Busy save had no explanation')
+      assert((await page.locator('#dsh-mobile-frp-action-hint').textContent()).length > 15)
+      held.release(200, state.remote)
+      await settle(postPath, publicCa)
+      assert.equal(count('POST', postPath), 3, 'A hidden self-signed port prevented saving public-CA settings')
+    })
+    cases++
+  }
+  await withControl(browser, 'FRP missing component explains disabled save', {
+    layoutFixture: true, frpFixture: true, frpInstalled: false,
+  }, async ({ page, state, count, waitRequest, consumed, settle, openRemote }) => {
+    await openRemote()
+    await page.locator('.dsh-mobile-control__self-hosted').evaluate(node => { node.open = true })
+    const refreshBefore = count('GET', remotePath)
+    const refreshConsumed = await consumed(remotePath)
+    state.holdNextRemote = true
+    const previous = await consumed(`${prefix}/remote/provider`)
+    await page.locator('.dsh-mobile-control__provider.is-frp').click()
+    await settle(`${prefix}/remote/provider`, previous)
+    const refresh = await waitRequest('GET', remotePath, refreshBefore)
+    assert.equal(typeof refresh.release, 'function', 'Provider refresh was not held')
+    const hint = page.locator('#dsh-mobile-frp-action-hint')
+    const provider = page.locator('.dsh-mobile-control__provider.is-frp')
+    const install = page.getByRole('button', { name: 'Install official frpc', exact: true })
+    assert.match(await hint.textContent(), /remote operation is in progress/u)
+    assert.equal(await provider.isDisabled(), true)
+    assert.equal(await install.isDisabled(), true)
+    assert.equal(await page.locator('.dsh-mobile-control__frp-setup .dsh-mobile-control__primary').last().isDisabled(), true)
+    refresh.release()
+    await settle(remotePath, refreshConsumed)
+    await waitUntil(async () => ({ provider: await provider.isEnabled(), install: await install.isEnabled() }),
+      enabled => enabled.provider && enabled.install, 'FRP provider refresh idle controls')
+    assert.equal(await hint.isVisible(), true)
+    assert.match(await hint.textContent(), /Install.*frpc/u)
+    assert.equal(await page.locator('.dsh-mobile-control__frp-setup .dsh-mobile-control__primary').last().isDisabled(), true)
+  })
+  cases++
   for (const language of ['en', 'it', 'zh']) {
     const codes = ['sidecar_exited', 'some_unknown_future_code', 'funnel_https_required', 'cloudflared_invalid_output', 'future_<img src=x onerror=alert(1)>']
     const diagnostics = {

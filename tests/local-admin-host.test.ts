@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   DESKTOP_ADMIN_HEADER,
   DESKTOP_ADMIN_MARKER,
+  WEB_ADMIN_HEADER,
+  WEB_ADMIN_MARKER,
   isDesktopAdminSurface,
   isLocalAdminHostname,
   localAdminRequestHeaders,
@@ -110,5 +112,40 @@ describe('local admin request headers', () => {
     const headers = localAdminRequestHeaders(init, new URL('http://127.0.0.1:3080/'))
     expect(headers.has(DESKTOP_ADMIN_HEADER)).toBe(false)
     expect(headers.get('content-type')).toBe('application/problem+json')
+  })
+
+  it.each(['http://127.0.0.1:3080/', 'http://192.168.50.23:3080/', 'https://localhost:3080/'])('marks a JSON POST on the trusted Web admin surface %s', url => {
+    const headers = localAdminRequestHeaders({ method: 'post' }, new URL(url))
+    expect(headers.get(WEB_ADMIN_HEADER)).toBe(WEB_ADMIN_MARKER)
+    expect(headers.has(DESKTOP_ADMIN_HEADER)).toBe(false)
+    expect(headers.get('content-type')).toBe('application/json')
+  })
+
+  it.each([
+    ['GET', 'http://127.0.0.1:3080/', 'application/json'],
+    ['POST', 'http://127.0.0.1:3080/', 'text/plain'],
+    ['POST', 'http://127.0.0.1:3080/', 'application/problem+json'],
+    ['POST', 'https://evil.example/', 'application/json'],
+    ['POST', 'https://8.8.8.8/', 'application/json'],
+    ['POST', 'file:///owned.html', 'application/json'],
+    ['POST', 'dsh-app://other/', 'application/json'],
+  ])('does not add a Web proof for %s %s with %s', (method, url, contentType) => {
+    const original = new Headers({ [WEB_ADMIN_HEADER]: WEB_ADMIN_MARKER, [DESKTOP_ADMIN_HEADER]: DESKTOP_ADMIN_MARKER, 'content-type': contentType })
+    const headers = localAdminRequestHeaders({ method, headers: original }, new URL(url))
+    expect(headers.has(WEB_ADMIN_HEADER)).toBe(false)
+    expect(headers.has(DESKTOP_ADMIN_HEADER)).toBe(false)
+    expect(original.get(WEB_ADMIN_HEADER)).toBe(WEB_ADMIN_MARKER)
+    expect(original.get(DESKTOP_ADMIN_HEADER)).toBe(DESKTOP_ADMIN_MARKER)
+  })
+
+  it('keeps Desktop authentication and Web source markers distinct', () => {
+    const headers = localAdminRequestHeaders({ method: 'POST', headers: { [WEB_ADMIN_HEADER]: WEB_ADMIN_MARKER } }, new URL('dsh-app://app/'))
+    expect(headers.has(WEB_ADMIN_HEADER)).toBe(false)
+    expect(headers.get(DESKTOP_ADMIN_HEADER)).toBe(DESKTOP_ADMIN_MARKER)
+  })
+
+  it('recognizes a case-insensitive JSON media type with parameters', () => {
+    const headers = localAdminRequestHeaders({ method: 'POST', headers: { 'content-type': 'Application/JSON; charset=utf-8' } }, new URL('http://127.0.0.1:3080/'))
+    expect(headers.get(WEB_ADMIN_HEADER)).toBe(WEB_ADMIN_MARKER)
   })
 })

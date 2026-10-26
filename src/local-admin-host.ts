@@ -2,8 +2,11 @@
 
 export const DESKTOP_ADMIN_HEADER = 'x-dsh-mobile-desktop-admin'
 export const DESKTOP_ADMIN_MARKER = 'dsh-app://app'
+/** Non-simple source marker for this plugin's same-origin JSON management actions. */
+export const WEB_ADMIN_HEADER = 'x-dsh-mobile-web-admin'
+export const WEB_ADMIN_MARKER = 'same-origin-json'
 
-/** Add the forwarded Desktop marker only to this plugin's mutating admin requests. */
+/** Attach separate Desktop/Web source markers only to matching mutating admin requests. */
 export function localAdminRequestHeaders(
   init: RequestInit | undefined,
   location: Pick<Location, 'hostname' | 'protocol'>,
@@ -11,8 +14,13 @@ export function localAdminRequestHeaders(
   const headers = new Headers(init?.headers)
   if (!headers.has('content-type')) headers.set('content-type', 'application/json')
   headers.delete(DESKTOP_ADMIN_HEADER)
+  headers.delete(WEB_ADMIN_HEADER)
   if (init?.method?.toUpperCase() === 'POST' && location.protocol === 'dsh-app:' && location.hostname === 'app') {
     headers.set(DESKTOP_ADMIN_HEADER, DESKTOP_ADMIN_MARKER)
+  } else if (init?.method?.toUpperCase() === 'POST' && (location.protocol === 'http:' || location.protocol === 'https:')
+    && isLocalAdminHostname(location.hostname)
+    && headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json') {
+    headers.set(WEB_ADMIN_HEADER, WEB_ADMIN_MARKER)
   }
   return headers
 }

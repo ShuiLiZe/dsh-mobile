@@ -984,10 +984,13 @@ describe('dedicated mobile layout boot', () => {
       expect(controller?.getSnapshot()).toMatchObject({
         detailsOpen: false, sidebarOpen: true, panelInfo: { activePanelId: 'alpha' },
       })
+
       expect(back().defaultPrevented).toBe(true)
       expect(controller?.getSnapshot()).toMatchObject({ sidebarOpen: false, panelInfo: { activePanelId: 'alpha' } })
+
       expect(back().defaultPrevented).toBe(true)
       expect(controller?.getSnapshot().panelInfo.activePanelId).toBeNull()
+
       expect(back().defaultPrevented).toBe(false)
 
       controller?.toggleSidebar()
@@ -1317,6 +1320,20 @@ describe('mobile boot batch chunking', () => {
     expect(split.plans.length).toBeGreaterThan(1)
     expect(split.rows.filter(row => row.url.startsWith('/mobile-access/'))).toHaveLength(split.plans.length)
     expect(split.rows.filter(row => row.url.startsWith('/plugins/'))).toHaveLength(0)
+    expect(split.rows.flatMap(row => row.entries).sort()).toEqual([...ids, layoutId].sort())
+  })
+
+  it('keeps each merged batch inside the phone download budget', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
+    const plan = parseMobileBootPlan(batchedIndex(ids))
+    const sizes = new Map(ids.map(id => [`/plugins/${id}.js`, 2 * 1024 * 1024]))
+    const split = splitMobileBootBatch(plan.planEntries!, sizes, new Set())
+    const merged = split.rows.filter(row => row.url.startsWith('/mobile-access/mobile-boot/'))
+    expect(merged.length).toBeGreaterThan(1)
+    for (const row of merged) {
+      const bytes = row.entries.reduce((total, id) => total + (sizes.get(`/plugins/${id}.js`) ?? 0) + 3, 0)
+      expect(bytes).toBeLessThanOrEqual(3 * 1024 * 1024)
+    }
     expect(split.rows.flatMap(row => row.entries).sort()).toEqual([...ids, layoutId].sort())
   })
 

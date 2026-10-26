@@ -28,6 +28,7 @@ internal data class PairedDeviceRecord(
     val lastConnectedAt: Long?,
     val lastReachableAt: Long?,
     val status: PairedDeviceStatus,
+    val installationId: String? = null,
 ) {
     /** Stable local key used to merge a rotated cpolar origin or a re-pair. */
     val key: String get() = "${mode.name.lowercase()}:$instanceId"
@@ -246,6 +247,7 @@ internal class PairedDeviceStore(
             lastConnectedAt = optionalLong(value, "lastConnectedAt"),
             lastReachableAt = optionalLong(value, "lastReachableAt"),
             status = status,
+            installationId = if (value.has("installationId")) value.opt("installationId") as? String ?: return null else null,
         )
         return row.takeIf { isValid(it) }
     }
@@ -253,6 +255,7 @@ internal class PairedDeviceStore(
     private fun encode(row: PairedDeviceRecord): JSONObject = JSONObject().apply {
         put("version", 1)
         put("instanceId", row.instanceId)
+        if (row.installationId != null) put("installationId", row.installationId)
         put("deviceId", row.deviceId)
         put("displayName", row.displayName)
         put("mode", row.mode.name)
@@ -271,6 +274,7 @@ internal class PairedDeviceStore(
 
     private fun isValid(row: PairedDeviceRecord): Boolean =
         INSTANCE_ID.matches(row.instanceId)
+            && (row.installationId == null || INSTANCE_ID.matches(row.installationId))
             && (row.deviceId.isEmpty() || DEVICE_ID.matches(row.deviceId))
             && TOKEN.matches(row.deviceToken)
             && RemoteHostPolicy.isAllowed(row.mode, row.origin.host)

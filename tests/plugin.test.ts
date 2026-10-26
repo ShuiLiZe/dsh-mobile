@@ -1,7 +1,8 @@
 import { Context, type Message } from '@deepseek-ai/cordis'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
-import { createHash } from 'node:crypto'
+import { createHash, X509Certificate } from 'node:crypto'
+import { createTestTlsChain } from './tls-fixtures.js'
 import { createServer, request as requestHttp, type IncomingMessage } from 'node:http'
 import { request as requestHttps } from 'node:https'
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -15,12 +16,13 @@ import { Config, parseGatewayConfig, type PluginConfig } from '../src/config.js'
 import { JsonMobileAccessControlStore } from '../src/control.js'
 import { parseCidr, RequestTrustPolicy } from '../src/network.js'
 import * as network from '../src/network.js'
-import { apply, inject, originGatewayConfig, remoteGatewayConfig, settleCleanupSteps, upstreamAuthenticatedUrl } from '../src/plugin.js'
+import { apply, frpIngressGatewayConfig, inject, originGatewayConfig, remoteGatewayConfig, settleCleanupSteps, upstreamAuthenticatedUrl } from '../src/plugin.js'
 import { parseOriginSettings } from '../src/origin-proxy-config.js'
 import { parseFrpSettings } from '../src/frp-config.js'
 import { ensureFrpIngressCertificate } from '../src/frp-ingress.js'
 import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from '../src/version.js'
-import { DESKTOP_ADMIN_HEADER, DESKTOP_ADMIN_MARKER } from '../src/local-admin-host.js'
+import { DESKTOP_ADMIN_HEADER, DESKTOP_ADMIN_MARKER, WEB_ADMIN_HEADER, WEB_ADMIN_MARKER } from '../src/local-admin-host.js'
+import { AccessController } from '../src/access.js'
 import { buildExtensionWorkerEntry } from './helpers/extension-worker-build.js'
 import { parseUnavailableExtensionHosts } from '../src/extension-recovery-ui.js'
 import { CaddyComponentManager, CADDY_VERSION, type CaddyArtifact } from '../src/caddy-component.js'
@@ -40,13 +42,18 @@ afterEach(async () => {
 
 async function invoke(
   route: WebRoute,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'OPTIONS',
   path: string,
   body = '',
   hostHostname = '127.0.0.1',
   requestHeaders?: Record<string, string>,
+  directPeer?: string,
 ): Promise<{ status: number; body: string }> {
-  const server = createServer((request, response) => { void route.handler(request, response) })
+  const server = createServer((request, response) => {
+    // Controlled admission fixture; the transport itself remains on loopback.
+    if (directPeer !== undefined) Object.defineProperty(request.socket, 'remoteAddress', { value: directPeer })
+    void route.handler(request, response)
+  })
   await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
   const port = (server.address() as AddressInfo).port
   const authority = `${hostHostname}:${String(port)}`
@@ -101,6 +108,7 @@ async function mount(
   config: Partial<PluginConfig> = {},
   requestRejection: (request: IncomingMessage) => 401 | 403 | undefined = () => 401,
   indexInjections: readonly { kind: string; text?: string }[] = [],
+  authenticationUrl?: (base: string) => string,
 ): Promise<{ context: Context; route: WebRoute; command: CommandDefinition; upstreamBase: string | undefined; directory: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-'))
   temporaryDirectories.push(directory)
@@ -126,7 +134,7 @@ async function mount(
   context.provide('connection', {
     authenticatedUrl(baseUrl: string) {
       upstreamBase = baseUrl
-      return `${baseUrl}/?token=test-launch-token`
+      return authenticationUrl === undefined ? `${baseUrl}/?token=test-launch-token` : authenticationUrl(baseUrl)
     },
     requestRejection,
   } as never)
@@ -253,12 +261,16 @@ async function nativeGatewayRequest(
   origin: string,
   path: string,
   data?: Record<string, string>,
+  ca?: string,
+  capability = 'installation-id',
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const body = data === undefined ? undefined : JSON.stringify(data)
   return new Promise((resolve, reject) => {
-    const request = requestHttp({ host: '127.0.0.1', port, path,
+    const request = (ca === undefined ? requestHttp : requestHttps)({ host: '127.0.0.1', port, path,
+      ...(ca === undefined ? {} : { ca }),
       method: body === undefined ? 'GET' : 'POST', agent: false,
       headers: { host: new URL(origin).host,
+        ...(capability === '' ? {} : { 'X-DSH-Mobile-Capabilities': capability }),
         ...(body === undefined ? {} : { origin, 'sec-fetch-site': 'same-origin',
           'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }),
       },
@@ -292,31 +304,33 @@ async function nativePairFromRoute(
   port: number,
   origin: string,
   instanceId: string,
+  ca?: string,
 ): Promise<Record<string, unknown>> {
-  const discovery = await nativeGatewayRequest(port, origin, '/mobile-access/discovery')
+  const discovery = await nativeGatewayRequest(port, origin, '/mobile-access/discovery', undefined, ca)
   expect(discovery.status).toBe(200)
   expect(discovery.body.instanceId).toBe(instanceId)
+  expect(discovery.body).not.toHaveProperty('installationId')
   const pairing = await invoke(route, 'POST', `/api/mobile-access/${mode}/pairing/open`, '{}')
   expect(pairing.status).toBe(201)
   const opened = JSON.parse(pairing.body) as Record<string, unknown>
   const token = responseString(opened, 'token')
   expect(opened.appKey).toBe(`dsh1.${instanceId}.${token}`)
-  const paired = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-pair', { token, label: 'Owned composition phone' })
+  const paired = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-pair', { token, label: 'Owned composition phone' }, ca)
   expect(paired.status).toBe(201)
-  expect(Object.keys(paired.body).sort()).toEqual(['csrfToken', 'deviceExpiresAt', 'deviceId', 'deviceToken', 'instanceId', 'sessionExpiresAt', 'sessionToken'])
+  expect(Object.keys(paired.body).sort()).toEqual(['csrfToken', 'deviceExpiresAt', 'deviceId', 'deviceToken', 'installationId', 'instanceId', 'sessionExpiresAt', 'sessionToken'])
   expect(paired.body.instanceId).toBe(instanceId)
   return paired.body
 }
 
-async function checkNativeCredential(port: number, origin: string, token: string, instanceId: string, deviceId: string): Promise<void> {
-  const probe = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-probe', { deviceToken: token })
+async function checkNativeCredential(port: number, origin: string, token: string, instanceId: string, deviceId: string, installationId: string, ca?: string): Promise<void> {
+  const probe = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-probe', { deviceToken: token }, ca)
   expect(probe.status).toBe(200)
-  expect(Object.keys(probe.body).sort()).toEqual(['deviceExpiresAt', 'deviceId', 'instanceId'])
-  expect(probe.body).toMatchObject({ instanceId, deviceId })
-  const renewed = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-renew', { deviceToken: token })
+  expect(Object.keys(probe.body).sort()).toEqual(['deviceExpiresAt', 'deviceId', 'installationId', 'instanceId'])
+  expect(probe.body).toMatchObject({ instanceId, deviceId, installationId })
+  const renewed = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-renew', { deviceToken: token }, ca)
   expect(renewed.status).toBe(200)
-  expect(Object.keys(renewed.body).sort()).toEqual(['csrfToken', 'deviceId', 'instanceId', 'sessionExpiresAt', 'sessionToken'])
-  expect(renewed.body).toMatchObject({ instanceId, deviceId })
+  expect(Object.keys(renewed.body).sort()).toEqual(['csrfToken', 'deviceId', 'installationId', 'instanceId', 'sessionExpiresAt', 'sessionToken'])
+  expect(renewed.body).toMatchObject({ instanceId, deviceId, installationId })
 }
 
 /**
@@ -422,6 +436,22 @@ describe('upstream browser authentication', () => {
 })
 
 describe('remote Funnel gateway configuration', () => {
+  it('propagates an independent installation identity to public, own-Origin and pinned FRP entries', () => {
+    const installationId = 'd'.repeat(64)
+    const template = { ...parseGatewayConfig({ stateFile: join(tmpdir(), 'installation-config-template.json'), listenPort: 0, tls: { mode: 'disabled' } }), installationId }
+    const stateFile = join(tmpdir(), 'installation-config-devices.json')
+    const publicConfig = remoteGatewayConfig(template, 'https://phone.example.com', stateFile, 'a'.repeat(64))
+    const originConfig = originGatewayConfig(template, parseOriginSettings({ publicOrigin: 'https://phone.example.com', listenHost: '127.0.0.1', allowedCidrs: ['127.0.0.0/8'] }), stateFile, 'b'.repeat(64), 0)
+    const frpConfig = frpIngressGatewayConfig(template, parseFrpSettings({ serverAddress: '1.2.3.4', serverPort: 7000, token: '0123456789abcdef0123456789abcdef', publicOrigin: 'https://1.2.3.4', mode: 'attach', entryTls: 'self-signed' }), stateFile, {
+      caFingerprint: 'c'.repeat(64),
+      paths: { directory: tmpdir(), caCertFile: 'ca.pem', caKeyFile: 'ca-key.pem', certFile: 'cert.pem', keyFile: 'key.pem', statusFile: 'status.json' },
+    })
+    expect([publicConfig, originConfig, frpConfig].map(config => config.installationId)).toEqual([installationId, installationId, installationId])
+    expect([publicConfig, originConfig, frpConfig].map(config => config.instanceId)).toEqual(['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)])
+    expect(frpConfig.pairingCaFile).toBe('ca.pem')
+    expect(remoteGatewayConfig(parseGatewayConfig({ stateFile: join(tmpdir(), 'installation-config-template.json'), listenPort: 0, tls: { mode: 'disabled' } }), 'https://phone.example.com', stateFile, 'a'.repeat(64))).not.toHaveProperty('installationId')
+  })
+
   it('keeps public HTTPS on 443 when the private listener uses an ephemeral port', () => {
     const template = parseGatewayConfig({
       listenHost: '127.0.0.1',
@@ -735,6 +765,28 @@ describe('stock DSH lifecycle', () => {
     expect(JSON.parse(allowed.body)).toMatchObject({ running: false })
   })
 
+  it('wires explicit management networks to authenticated DSH requests without changing defaults', async () => {
+    const authenticate = vi.fn((request: IncomingMessage) => request.headers.cookie === 'dsh-session=valid' ? undefined : 401)
+    const mounted = await mount(false, 3080, { adminAllowedCidrs: ['192.168.50.23/32'] }, authenticate)
+    const path = '/api/mobile-access/lan/control'
+    expect((await invoke(mounted.route, 'GET', path, '', '192.168.50.8', {}, '192.168.50.23')).status).toBe(401)
+    expect((await invoke(mounted.route, 'GET', path, '', '192.168.50.8', { cookie: 'dsh-session=valid' }, '192.168.50.23')).status).toBe(200)
+    expect((await invoke(mounted.route, 'GET', path, '', '192.168.50.8', { cookie: 'dsh-session=valid', 'x-forwarded-for': '192.168.50.23' }, '192.168.50.24')).status).toBe(403)
+    const defaultMount = await mount(false, 3080, {}, authenticate)
+    expect((await invoke(defaultMount.route, 'GET', path, '', '192.168.50.8', { cookie: 'dsh-session=valid' }, '192.168.50.23')).status).toBe(403)
+  })
+
+  it.each([
+    (base: string) => base,
+    (_base: string) => 'https://foreign.example/?token=not-ours',
+    (base: string) => `${base}/?other=not-a-token`,
+  ])('does not open network management when upstream authentication is disabled or unsupported', async authenticationUrl => {
+    const mounted = await mount(false, 3080, { adminAllowedCidrs: ['192.168.50.23/32'] }, () => undefined, [], authenticationUrl)
+    const path = '/api/mobile-access/lan/control'
+    expect((await invoke(mounted.route, 'GET', path, '', '192.168.50.8', {}, '192.168.50.23')).status).toBe(401)
+    expect((await invoke(mounted.route, 'GET', path)).status).toBe(200)
+  })
+
   it('requires an authenticated Host session for official Desktop Origin-less writes', async () => {
     const requestRejection = vi.fn((request: IncomingMessage) => request.headers.cookie === 'dsh-session=valid' ? undefined : 401)
     const mounted = await mount(false, 3080, {}, requestRejection)
@@ -770,6 +822,37 @@ describe('stock DSH lifecycle', () => {
     const allowed = await invoke(mounted.route, 'POST', path, invalidBody, '127.0.0.1', { ...marker, cookie: 'dsh-session=valid' })
     expect(allowed.status).toBe(400)
     expect(JSON.parse(allowed.body)).toEqual({ error: 'bad_request' })
+  })
+
+  it('accepts marked Origin-less Web JSON pairing without using Desktop authentication', async () => {
+    const openPairing = vi.spyOn(AccessController.prototype, 'openPairing')
+    const requestRejection = vi.fn(() => 401 as const)
+    const mounted = await mount(true, 3080, {}, requestRejection)
+    const path = '/api/mobile-access/lan/pairing/open'
+    const marker = { [WEB_ADMIN_HEADER]: WEB_ADMIN_MARKER }
+    for (const headers of [
+      {},
+      { ...marker, 'content-type': 'text/plain' },
+      { ...marker, origin: 'http://evil.example' },
+      { ...marker, 'sec-fetch-site': 'same-site' },
+      { ...marker, [WEB_ADMIN_HEADER]: `${WEB_ADMIN_MARKER}, ${WEB_ADMIN_MARKER}` },
+    ]) {
+      const rejected = await invoke(mounted.route, 'POST', path, '{}', '192.168.50.23', headers)
+      expect(rejected.status).toBe(403)
+      expect(JSON.parse(rejected.body)).toEqual({ error: 'forbidden' })
+    }
+    const preflight = await invoke(mounted.route, 'OPTIONS', path, '', '192.168.50.23', {
+      'access-control-request-method': 'POST', 'access-control-request-headers': WEB_ADMIN_HEADER,
+    })
+    expect(preflight.status).toBe(403)
+    expect(openPairing).not.toHaveBeenCalled()
+    for (const source of [{}, { 'sec-fetch-site': 'same-origin' }]) {
+      const allowed = await invoke(mounted.route, 'POST', path, '{}', '192.168.50.23', { ...marker, ...source })
+      expect(allowed.status).toBe(201)
+      expect(JSON.parse(allowed.body)).toMatchObject({ token: expect.any(String) })
+    }
+    expect(openPairing).toHaveBeenCalledTimes(2)
+    expect(requestRejection).not.toHaveBeenCalled()
   })
 
   it('rejects DNS-rebinding and public Host values on the desktop admin route', async () => {
@@ -838,10 +921,97 @@ describe('stock DSH lifecycle', () => {
     const origin = responseString(JSON.parse(status.body) as Record<string, unknown>, 'origin')
     const port = Number(new URL(origin).port)
     const paired = await nativePairFromRoute(mounted.route, 'lan', port, origin, instanceId)
-    await checkNativeCredential(port, origin, responseString(paired, 'deviceToken'), instanceId, responseString(paired, 'deviceId'))
+    expect(paired.installationId).toBe(instanceId)
+    await checkNativeCredential(port, origin, responseString(paired, 'deviceToken'), instanceId, responseString(paired, 'deviceId'), responseString(paired, 'installationId'))
     const state = JSON.parse(await readFile(join(mounted.directory, 'devices.json'), 'utf8')) as { version: number; devices: { nativeInstanceId?: string }[] }
     expect(state.version).toBe(2)
     expect(state.devices.map(device => device.nativeInstanceId)).toEqual([instanceId])
+  })
+
+  it('keeps exact legacy native wire keys on plugin gateways unless installation identity is explicitly negotiated', async () => {
+    const mounted = await mount(true)
+    const status = await invoke(mounted.route, 'GET', '/api/mobile-access/lan/control')
+    const origin = responseString(JSON.parse(status.body) as Record<string, unknown>, 'origin')
+    const port = Number(new URL(origin).port)
+    const installationId = (await readFile(join(mounted.directory, 'installation-id'), 'utf8')).trim()
+    for (const capability of ['', 'unknown-feature', 'installation-id']) {
+      const opened = await invoke(mounted.route, 'POST', '/api/mobile-access/lan/pairing/open', '{}')
+      expect(opened.status).toBe(201)
+      const token = responseString(JSON.parse(opened.body) as Record<string, unknown>, 'token')
+      const paired = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-pair', { token }, undefined, capability)
+      expect(paired.status).toBe(201)
+      const optionalKeys = capability === 'installation-id' ? ['installationId'] : []
+      expect(Object.keys(paired.body).sort()).toEqual(['csrfToken', 'deviceExpiresAt', 'deviceId', 'deviceToken', 'instanceId', 'sessionExpiresAt', 'sessionToken', ...optionalKeys].sort())
+      const deviceToken = responseString(paired.body, 'deviceToken')
+      const probe = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-probe', { deviceToken }, undefined, capability)
+      expect(probe.status).toBe(200)
+      expect(Object.keys(probe.body).sort()).toEqual(['deviceExpiresAt', 'deviceId', 'instanceId', ...optionalKeys].sort())
+      const renewed = await nativeGatewayRequest(port, origin, '/mobile-access/auth/native-renew', { deviceToken }, undefined, capability)
+      expect(renewed.status).toBe(200)
+      expect(Object.keys(renewed.body).sort()).toEqual(['csrfToken', 'deviceId', 'instanceId', 'sessionExpiresAt', 'sessionToken', ...optionalKeys].sort())
+      if (capability === 'installation-id') {
+        for (const body of [paired.body, probe.body, renewed.body]) expect(body.installationId).toBe(installationId)
+      }
+    }
+    for (const action of ['native-pair', 'native-probe', 'native-renew']) {
+      const denied = await nativeGatewayRequest(port, origin, `/mobile-access/auth/${action}`, { token: 'X'.repeat(43), deviceToken: 'X'.repeat(43) })
+      expect(denied.status).toBe(401)
+      expect(denied.body).toEqual({ error: 'authentication_failed' })
+    }
+  })
+
+  it('shares the persisted installation identity across independently paired CA-backed LAN and own-Origin entries after restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-ca-grouping-'))
+    temporaryDirectories.push(directory)
+    const chain = createTestTlsChain()
+    const caCertFile = join(directory, 'ca.pem')
+    const certFile = join(directory, 'server.pem')
+    const keyFile = join(directory, 'server-key.pem')
+    await writeFile(caCertFile, chain.rootCert)
+    await writeFile(certFile, chain.leafCert + chain.intermediateCert)
+    await writeFile(keyFile, chain.leafKey)
+    const caId = new X509Certificate(chain.rootCert).fingerprint256.replaceAll(':', '').toLowerCase()
+    // Fixed CA-backed config exercises the real plugin LAN factory without
+    // requiring a machine-specific interface or managed-certificate renewal.
+    const config: Partial<PluginConfig> = {
+      stateFile: join(directory, 'devices.json'), controlFile: join(directory, 'control.json'),
+      instanceId: caId, pairingCaFile: caCertFile, tls: { mode: 'provided', certFile, keyFile },
+    }
+    const mounted = await mount(true, 3080, config)
+    const installationId = (await readFile(join(directory, 'installation-id'), 'utf8')).trim()
+    expect(installationId).not.toBe(caId)
+    const lanStatus = await invoke(mounted.route, 'GET', '/api/mobile-access/lan/control')
+    const lanOrigin = responseString(JSON.parse(lanStatus.body) as Record<string, unknown>, 'origin')
+    const lanPort = Number(new URL(lanOrigin).port)
+    const lanPair = await nativePairFromRoute(mounted.route, 'lan', lanPort, lanOrigin, caId, chain.rootCert)
+    expect(lanPair.installationId).toBe(installationId)
+    const selected = await invoke(mounted.route, 'POST', '/api/mobile-access/remote/provider', '{"provider":"origin"}')
+    expect(selected.status).toBe(200)
+    const remote = await startOriginOnFreePort(mounted.route)
+    expect(remote.started.status).toBe(200)
+    const remotePair = await nativePairFromRoute(mounted.route, 'remote', remote.port, remote.form.publicOrigin, caId)
+    expect(remotePair.installationId).toBe(installationId)
+    const lanToken = responseString(lanPair, 'deviceToken')
+    const remoteToken = responseString(remotePair, 'deviceToken')
+    expect(lanToken).not.toBe(remoteToken)
+    const lanDevice = responseString(lanPair, 'deviceId')
+    const remoteDevice = responseString(remotePair, 'deviceId')
+    await checkNativeCredential(lanPort, lanOrigin, lanToken, caId, lanDevice, installationId, chain.rootCert)
+    await checkNativeCredential(remote.port, remote.form.publicOrigin, remoteToken, caId, remoteDevice, installationId)
+    // Shared identity is a hint, not interchangeable LAN/remote authorization.
+    const wrongChannel = await nativeGatewayRequest(remote.port, remote.form.publicOrigin, '/mobile-access/auth/native-probe', { deviceToken: lanToken })
+    expect(wrongChannel.status).toBe(401)
+    expect(wrongChannel.body).toEqual({ error: 'authentication_failed' })
+    await mounted.context.fiber.dispose()
+    contexts.splice(contexts.indexOf(mounted.context), 1)
+    const restarted = await mount(true, 3080, config)
+    expect((await readFile(join(directory, 'installation-id'), 'utf8')).trim()).toBe(installationId)
+    const nextLanStatus = await invoke(restarted.route, 'GET', '/api/mobile-access/lan/control')
+    const nextLanOrigin = responseString(JSON.parse(nextLanStatus.body) as Record<string, unknown>, 'origin')
+    const nextRemote = await startOriginOnFreePort(restarted.route)
+    expect(nextRemote.started.status).toBe(200)
+    await checkNativeCredential(Number(new URL(nextLanOrigin).port), nextLanOrigin, lanToken, caId, lanDevice, installationId, chain.rootCert)
+    await checkNativeCredential(nextRemote.port, nextRemote.form.publicOrigin, remoteToken, caId, remoteDevice, installationId)
   })
 
   it('preserves legacy native credentials beside installation-bound own-Origin pairings after plugin restart', async () => {
@@ -865,11 +1035,11 @@ describe('stock DSH lifecycle', () => {
     const first = await startOriginOnFreePort(mounted.route)
     expect(first.configured.status).toBe(200)
     expect(JSON.parse(first.started.body)).toMatchObject({ provider: 'origin', running: true, state: 'ready' })
-    await checkNativeCredential(first.port, first.form.publicOrigin, token, legacyId, deviceId)
+    await checkNativeCredential(first.port, first.form.publicOrigin, token, legacyId, deviceId, instanceId)
     const paired = await nativePairFromRoute(mounted.route, 'remote', first.port, first.form.publicOrigin, instanceId)
     const freshToken = responseString(paired, 'deviceToken')
     const freshDevice = responseString(paired, 'deviceId')
-    await checkNativeCredential(first.port, first.form.publicOrigin, freshToken, instanceId, freshDevice)
+    await checkNativeCredential(first.port, first.form.publicOrigin, freshToken, instanceId, freshDevice, instanceId)
     const stopped = await invoke(mounted.route, 'POST', '/api/mobile-access/remote/control', '{"running":false}')
     expect(JSON.parse(stopped.body)).toMatchObject({ running: false, state: 'off' })
     await mounted.context.fiber.dispose()
@@ -878,8 +1048,8 @@ describe('stock DSH lifecycle', () => {
     expect((await readFile(join(directory, 'installation-id'), 'utf8')).trim()).toBe(instanceId)
     const second = await startOriginOnFreePort(restarted.route)
     expect(JSON.parse(second.started.body)).toMatchObject({ provider: 'origin', running: true, state: 'ready' })
-    await checkNativeCredential(second.port, second.form.publicOrigin, token, legacyId, deviceId)
-    await checkNativeCredential(second.port, second.form.publicOrigin, freshToken, instanceId, freshDevice)
+    await checkNativeCredential(second.port, second.form.publicOrigin, token, legacyId, deviceId, instanceId)
+    await checkNativeCredential(second.port, second.form.publicOrigin, freshToken, instanceId, freshDevice, instanceId)
   })
 
   it('retains the explicit operator identity for fixed and own-Origin native entries', async () => {
@@ -889,7 +1059,7 @@ describe('stock DSH lifecycle', () => {
     const status = await invoke(mounted.route, 'GET', '/api/mobile-access/lan/control')
     const origin = responseString(JSON.parse(status.body) as Record<string, unknown>, 'origin')
     const paired = await nativePairFromRoute(mounted.route, 'lan', Number(new URL(origin).port), origin, instanceId)
-    await checkNativeCredential(Number(new URL(origin).port), origin, responseString(paired, 'deviceToken'), instanceId, responseString(paired, 'deviceId'))
+    await checkNativeCredential(Number(new URL(origin).port), origin, responseString(paired, 'deviceToken'), instanceId, responseString(paired, 'deviceId'), responseString(paired, 'installationId'))
     const stopped = await invoke(mounted.route, 'POST', '/api/mobile-access/lan/control', '{"running":false}')
     expect(JSON.parse(stopped.body)).toMatchObject({ running: false })
     const selected = await invoke(mounted.route, 'POST', '/api/mobile-access/remote/provider', '{"provider":"origin"}')
@@ -897,7 +1067,11 @@ describe('stock DSH lifecycle', () => {
     const remote = await startOriginOnFreePort(mounted.route)
     expect(JSON.parse(remote.started.body)).toMatchObject({ provider: 'origin', running: true, state: 'ready' })
     const remotePair = await nativePairFromRoute(mounted.route, 'remote', remote.port, remote.form.publicOrigin, instanceId)
-    await checkNativeCredential(remote.port, remote.form.publicOrigin, responseString(remotePair, 'deviceToken'), instanceId, responseString(remotePair, 'deviceId'))
+    const installationId = (await readFile(join(mounted.directory, 'installation-id'), 'utf8')).trim()
+    expect(paired.installationId).toBe(installationId)
+    expect(remotePair.installationId).toBe(installationId)
+    expect(installationId).not.toBe(instanceId)
+    await checkNativeCredential(remote.port, remote.form.publicOrigin, responseString(remotePair, 'deviceToken'), instanceId, responseString(remotePair, 'deviceId'), installationId)
   })
 
   it('switches remote providers without changing the LAN runtime', async () => {
@@ -1066,6 +1240,14 @@ describe('stock DSH lifecycle', () => {
     expect(purged.status).toBe(200)
     expect(await frpProxyNameFromRoute(first.route)).toBe(firstName)
     expect(await readFile(join(first.directory, 'installation-id'), 'utf8')).toMatch(/^[a-f0-9]{64}\n$/u)
+  })
+
+  it('rewrites a stale managed upstream snapshot to the active DSH port', async () => {
+    const setupFile = await managedSetupFile('http://127.0.0.1:11111')
+    await mount(false, 57_725, { setupFile })
+    const rewritten = JSON.parse(await readFile(setupFile, 'utf8')) as { upstreamOrigin: string; listenPort: number }
+    expect(rewritten.upstreamOrigin).toBe('http://127.0.0.1:57725')
+    expect(rewritten.listenPort).toBe(3443)
   })
 
   it('keeps the FRP proxy name when an unconfigured setup becomes managed after restart', async () => {

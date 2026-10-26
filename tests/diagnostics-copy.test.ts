@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFailed } from 'vitest'
 import { localizedDiagnosticEntryCopy } from '../src/client.js'
 import { DIAGNOSTIC_REASON_MESSAGES, MOBILE_CONTROL_MESSAGES } from '../src/client-messages.js'
 
@@ -48,17 +48,36 @@ describe.each(['en', 'it', 'zh'] as const)('diagnostic copy (%s)', locale => {
     }
   })
 
-  it('retains versions and proxy-specific copy for unrelated diagnostic entries', () => {
+  it('retains complete versions and omits incomplete version fields', () => {
     const versions = { plugin: '1.2.3', dsh: '4.5.6', minimumAndroidApp: '7.8.9' }
     expect(localizedDiagnosticEntryCopy({ reason: 'versions-current' }, locale, versions).detail)
       .toBe(`${DIAGNOSTIC_REASON_MESSAGES[locale]['versions-current'][0]} plugin 1.2.3, DSH 4.5.6, Android 7.8.9.`)
     expect(localizedDiagnosticEntryCopy({ reason: 'versions-current' }, locale, { plugin: '1.2.3' }).detail)
       .toBe(DIAGNOSTIC_REASON_MESSAGES[locale]['versions-current'][0])
-    const proxyCopy = localizedDiagnosticEntryCopy({ reason: 'remote-ready', facts: {
+  })
+
+  it('retains proxy-specific copy and localized latency', () => {
+    const timings: { stage: string; wallMs: number; processCpuMs: number }[] = []
+    const measure = <T>(stage: 'localize' | 'detail-assertion' | 'action-assertion', action: () => T): T => {
+      const wallStart = performance.now()
+      const cpuStart = process.cpuUsage()
+      try {
+        return action()
+      } finally {
+        const cpu = process.cpuUsage(cpuStart)
+        timings.push({ stage, wallMs: performance.now() - wallStart, processCpuMs: (cpu.user + cpu.system) / 1000 })
+      }
+    }
+    onTestFailed(() => {
+      console.error('[diagnostic-copy-timing]', JSON.stringify({
+        locale, node: process.version, icu: process.versions.icu, timings,
+      }))
+    })
+    const proxyCopy = measure('localize', () => localizedDiagnosticEntryCopy({ reason: 'remote-ready', facts: {
       provider: 'origin', viaProxy: true, latencyMs: 123, endpointSuffix: 'example.com',
-    } }, locale)
-    expect(proxyCopy.detail).toBe(DIAGNOSTIC_REASON_MESSAGES[locale]['remote-ready-via-proxy'][0]
-      .replace('{provider}', messages.originName!).replace('{latencyMs}', '123').replace('{endpointSuffix}', 'example.com'))
-    expect(proxyCopy.action).toBe(DIAGNOSTIC_REASON_MESSAGES[locale]['remote-ready-via-proxy'][1])
+    } }, locale))
+    measure('detail-assertion', () => expect(proxyCopy.detail).toBe(DIAGNOSTIC_REASON_MESSAGES[locale]['remote-ready-via-proxy'][0]
+      .replace('{provider}', messages.originName!).replace('{latencyMs}', '123').replace('{endpointSuffix}', 'example.com')))
+    measure('action-assertion', () => expect(proxyCopy.action).toBe(DIAGNOSTIC_REASON_MESSAGES[locale]['remote-ready-via-proxy'][1]))
   })
 })

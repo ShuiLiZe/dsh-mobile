@@ -26,20 +26,20 @@
   <a href="#compatibility">Compatibility</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="#contributors">Contributors</a> ·
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14">Release notes</a> ·
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.18">Release notes</a> ·
   <a href="README.md">简体中文</a>
 </p>
 
 > DSH Mobile is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **Current stable release: 0.6.14**. Improve history-loading gestures and shared sidebar-footer entries, and support IPv6 loopback/ULA backends for an existing HTTPS reverse proxy. Android App **0.6.5** is unchanged and needs no matching update. [Release notes and downloads](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14) · [Full changelog](CHANGELOG.md).
+> **Current stable release: 0.6.18**. Create folders from the remote directory picker, with compact navigation and controls that leave more room for folders. Recover from stale module choices that prevented the page from opening, and optionally administer a NAS from an authenticated, controlled network. Independently released App **0.6.8** fixes repeated first-load restarts; plugin features remain compatible with App 0.6.7. [Plugin release notes and downloads](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.18) · [Full changelog](CHANGELOG.md).
 >
 > **Version policy**: since plugin **0.6.2**, the Android app and plugin use independent version numbers and releases. Their numbers do not need to match, and a plugin update does not imply an app update. [Compatibility notes](#compatibility).
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.5/dsh-mobile-android-v0.6.5.apk"><img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.5/dsh-mobile-android-v0.6.5.apk"><strong>Download Android app 0.6.5</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/android-v0.6.5">Release notes and checksums</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.8/dsh-mobile-android-v0.6.8.apk"><img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/brand/app-icon-rounded.svg" alt="DSH Mobile Android app icon" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.8/dsh-mobile-android-v0.6.8.apk"><strong>Download Android app 0.6.8</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/android-v0.6.8">Release notes and checksums</a></sub>
 </p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel, cpolar, cloudflared, self-hosted FRP, or own reverse-proxy remote path. Both routes reach the same sessions, Workspaces, messages, and tools. The computer manages their switches and pairing authorizations separately; the Android app lists paired computers together. The plugin does not modify DeepSeek Harness source.
@@ -130,7 +130,7 @@ Use this when the phone and computer share Wi-Fi, Ethernet, or a phone hotspot. 
 
 When other plugin entries share the sidebar footer, **Mobile access** becomes a phone-icon button. Hover to read its name; clicking opens the same panel. Its text label returns when the entry is alone.
 
-Port note: `dsh web --port` changes the DSH Web upstream port (3080 by default), which the plugin follows automatically. `dsh-mobile setup --port` changes the Mobile HTTPS listener (3443 by default), and the pairing QR code includes the selected port.
+Port note: `dsh web --port` changes the DSH Web upstream port (3080 by default), which the plugin follows automatically. `dsh-mobile setup --port` changes the Mobile HTTPS listener (3443 by default), and the pairing QR code includes the selected port. When DSH Desktop starts with `--port 0`, the gateway follows the **actual port in use**; `upstreamOrigin` in `mobile-access/setup.json` is only the snapshot from the first setup, and the plugin refreshes it at startup — do not read it as the upstream the gateway uses.
 
 <details>
 <summary>Headless hosts, private proxies and additional source networks</summary>
@@ -143,7 +143,7 @@ For a routed network such as WireGuard, 0.6.0 offers [additional trusted network
 
 The app is optional: select **Copy pairing link** and open it in a mobile browser. LAN uses a private certificate, which the browser may warn about on first visit; continue only after confirming that this is your DSH gateway. A public-certificate remote origin should not show a certificate warning. If it does, check the channel and certificate instead of bypassing the warning.
 
-Browser pairing and reauthentication pages use the browser's `Accept-Language` to show Simplified Chinese, English, or Italian. Android screens follow the system language, while the DSH plugin control panel follows the language selected by DSH.
+Browser pairing and reauthentication pages support Simplified Chinese, English and Italian. Since plugin 0.6.16, they prefer the DSH display language remembered for that gateway hostname, falling back to the browser's `Accept-Language` when no usable preference exists; clearing site data or changing hostname can reset it. Native Android screens follow the system language, while the DSH plugin control panel follows DSH's current language.
 
 For manual browser pairing, enter the 43-character pairing code shown on the computer. Keys starting with `dsh1.` or `dsh2.` belong in the Android app, not the browser field. Prefer the pairing link copied from the computer, which fills the code automatically; generate a new link when it expires.
 
@@ -264,6 +264,8 @@ Each row shows its custom name, transport, Origin, periodically refreshed reacha
 - Open DSH **Settings → General → Switch computer** in the WebView to return to the list. An online computer-side revocation keeps the row as **Removed on computer**, stops reconnection and offers re-pairing or local deletion.
 - **Added in 0.6.0**: fixed order, new computers appended, and migration of the previously visible order. **Move up / Move to top** save the arrangement independently from startup selection. Inside the app, hold the top-left drawer toggle to return to the list; a normal tap still toggles the drawer. Browsers have no such native action.
 
+With App 0.6.7 and plugin 0.6.16, open the list's **Settings → Automatic same-computer connection** to choose **Manual** (default), **Detect and ask**, or **Automatic switch and notify**. Pair the computer's LAN and remote entries separately. Automatic mode transfers only eligible plain-text drafts in the current Session, not full page state; attachments, references or pending operations require confirmation. See the [App switching guide](apps/mobile/README.md#automatic-same-computer-connection).
+
 Revoking a device permanently deletes its durable record and token digest instead of retaining a `revokedAt` tombstone. Startup also removes legacy revoked rows. A deleted token receives `401 authentication_failed`, just like an unknown token. Existing apps checking a device that was revoked while offline may therefore show **Pairing expired** and require pairing again; online Sessions still receive the revocation notification and disconnect immediately.
 
 <table>
@@ -361,6 +363,7 @@ flowchart LR
   Lan --> Gateway["DSH Mobile Gateway Core"]
   Remote --> Gateway
   Gateway -->|"loopback proxy"| DSH["Stock DSH Web and Host"]
+  DSH -->|"same workspace, sessions and event stream"| Phone
 ```
 
 Three layers: the Host face for discovery, pairing, HTTPS, loopback proxying, and extension registration; the Client face for the dedicated mobile layout and extension SDK; and the Android app for a narrow native bridge. The bridge uses `androidx.webkit` WebMessage, verifies the exact top-level origin and main frame on every bounded message, and never uses `addJavascriptInterface`. The plugin does not rewrite source or webpage files in the DeepSeek Harness installation. Its mobile gateway serves the startup compatibility layer and dedicated layout per request; installation and removal use the plugin mechanism. The upstream DSH Web port defaults to 3080 and is configurable through `dsh web --port`.
@@ -415,20 +418,25 @@ On macOS, local network, cloudflared, self-hosted FRP and the own reverse proxy 
 | `0.6.11` | Isolated packed-browser CI on `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2`, `0.2.1-alpha.2` and `0.2.1-alpha.3`; additional real history-pagination, viewport-preservation and manual-loading checks on `0.2.0-rc.2` and `0.2.1-alpha.3`. Browser checks do not establish acceptance of every phone engine, third-party plugin or public route |
 | `0.6.12` | Packed installation, mobile boot, missing-API simulation, Workspace streaming, retained-page transport recovery and mobile settings on `0.2.1-rc.2`; authentication/resource regression with the actual community `dsh-web-startup-auth@0.1.12` on `0.2.0-rc.2`. This does not establish physical Chromium 92, arbitrary auth-plugin or public-route acceptance |
 | `0.6.13` | Packed text/image HTTP 400 recovery, Host refusal guard and error-feedback checks on `0.2.0-rc.2` and `0.2.1-rc.2`; Gateway 408/431 classification, bounded diagnostics and four Gateway factory wiring passed local tests. DSH source, iroh P2P and Android native code are outside this release |
+| `0.6.14` | Release CI packed-browser jobs green on all eight DSH versions from `0.1.7-alpha.2` to `0.2.1-rc.2`; no additional per-version manual acceptance was recorded for this release |
+| `0.6.15` | `0.2.1-rc.2`: real admin-panel pairing in Firefox 158 privacy mode, the HTTPS mobile page and Workspace-read baseline, and silent Blob playback; release CI green on all eight versions |
+| `0.6.16` | `0.2.1-rc.2`: Gallery selection, plain-text draft transfer through public DSH input APIs, real mux recovery and cross-client pending questions; CI additionally covered `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2`, `0.2.1-alpha.2` and `0.2.1-alpha.3` |
+| `0.6.17` | `0.2.0-rc.2` and `0.2.1-rc.2`: 15 real packed Chromium directory-picker checks, the old-WebView missing-API simulation and Workspace mux reads; the published package was then installed into official Desktop `0.2.1-rc.2` and its files matched byte for byte |
+| `0.6.18` | `0.2.1-rc.2`: 18 real packed Chromium directory-picker checks, including compact layout, folder creation and cancellation; the candidate was installed in local official Desktop `0.2.1-rc.3` with LAN and Cloudflare gateways running |
 
 <details>
 <summary>Historical version checks</summary>
 
 | DSH Mobile plugin | Verified DeepSeek Harness version |
 | --- | --- |
-| `0.5.5` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1`, and `0.2.0-rc.2` (npm installation, isolated pairing, mobile-page boot, and WebSocket Workspace baseline) |
-| `0.6.0` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1` and `0.2.0-rc.2` (packed installation, pairing, mobile-page boot and WebSocket Workspace reads); additional checks cover the mobile composer, module settings and component loading after a normal official Desktop restart |
-| `0.6.2` | Packed legacy-WebView boot, touch scrolling and missing-API/viewport negative controls passed on `0.2.0-rc.2`, with release CI passing. The reporter's physical old devices in #187 were not claimed as accepted |
-| `0.6.3` | `0.2.0-rc.2` and `0.2.1-alpha.2` (packed installation, isolated pairing, mobile boot and WebSocket Workspace reads); additional checks cover the composer, settings and extension Worker timeout, streaming and explicit recovery |
-| `0.6.4` | `0.2.0-rc.2` (packed installation, isolated pairing, mobile boot and WebSocket Workspace reads); additionally 72 real public-slot composer layouts, Windows Desktop directory-picker composition and cross-platform regressions. The reported remote timeout in community Desktop 2.0.17 remains unclaimed as accepted |
-| `0.6.5` | Packed module-management and mobile-settings regressions on `0.2.0-rc.2` and `0.2.1-alpha.2`; additionally Windows cpolar extraction and populated Trajectory layout with published `maid-atelier` 0.1.7. This does not establish acceptance of every third-party skin or reporter device |
-| `0.6.6` | Packed attachment intake and decoded-preview regressions on `0.2.0-rc.2` and `0.2.1-alpha.2`, covering multiple images, cancellation, late results and superseded requests. Android system-picker changes are released independently, not through the npm update |
 | `0.6.8` | Packed mobile boot, legacy-WebView API simulation, WebSocket Workspace reads, mobile settings, module management, sidebar and composer regressions on `0.2.1-alpha.3`; separate real HTTP/TLS and legacy-credential upgrade tests cover the identity fix. The local official Desktop `0.2.0-rc.2` loads this plugin version with existing pairings preserved. This does not establish phone cellular or every third-party plugin combination |
+| `0.6.6` | Packed attachment intake and decoded-preview regressions on `0.2.0-rc.2` and `0.2.1-alpha.2`, covering multiple images, cancellation, late results and superseded requests. Android system-picker changes are released independently, not through the npm update |
+| `0.6.5` | Packed module-management and mobile-settings regressions on `0.2.0-rc.2` and `0.2.1-alpha.2`; additionally Windows cpolar extraction and populated Trajectory layout with published `maid-atelier` 0.1.7. This does not establish acceptance of every third-party skin or reporter device |
+| `0.6.4` | `0.2.0-rc.2` (packed installation, isolated pairing, mobile boot and WebSocket Workspace reads); additionally 72 real public-slot composer layouts, Windows Desktop directory-picker composition and cross-platform regressions. The reported remote timeout in community Desktop 2.0.17 remains unclaimed as accepted |
+| `0.6.3` | `0.2.0-rc.2` and `0.2.1-alpha.2` (packed installation, isolated pairing, mobile boot and WebSocket Workspace reads); additional checks cover the composer, settings and extension Worker timeout, streaming and explicit recovery |
+| `0.6.2` | Packed legacy-WebView boot, touch scrolling and missing-API/viewport negative controls passed on `0.2.0-rc.2`, with release CI passing. The reporter's physical old devices in #187 were not claimed as accepted |
+| `0.6.0` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1` and `0.2.0-rc.2` (packed installation, pairing, mobile-page boot and WebSocket Workspace reads); additional checks cover the mobile composer, module settings and component loading after a normal official Desktop restart |
+| `0.5.5` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1`, and `0.2.0-rc.2` (npm installation, isolated pairing, mobile-page boot, and WebSocket Workspace baseline) |
 | `0.5.4` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1`, and `0.2.0-rc.2` (npm installation, isolated pairing, mobile-page boot, and WebSocket Workspace baseline) |
 | `0.5.3` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, `0.2.0-rc.1`, and `0.2.0-rc.2` (source contract, npm installation, isolated pairing, mobile-page boot, and WebSocket Workspace baseline) |
 | `0.5.2` | `0.1.7-alpha.2`, `0.1.7-rc.1`, `0.1.7-rc.2`, and `0.2.0-rc.1` (carried forward from earlier verification); `0.2.0-rc.2` (source contract, isolated pairing, mobile-page boot, and WebSocket Workspace baseline) |

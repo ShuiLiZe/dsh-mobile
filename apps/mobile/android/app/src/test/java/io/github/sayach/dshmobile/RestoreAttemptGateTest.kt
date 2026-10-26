@@ -12,6 +12,59 @@ import org.junit.Test
 /** Exercises the production callback gate without requiring an Android Activity or a real credential. */
 class RestoreAttemptGateTest {
     @Test
+    fun aSecondFailureDoesNotClaimAnotherRenewalWhileCookiesAreBeingInstalled() {
+        val gate = RestoreAttemptGate()
+        val generation = gate.begin()
+
+        assertTrue(gate.claimRestore(generation))
+        assertTrue(gate.restorePending)
+        assertFalse(gate.claimRestore(generation))
+        gate.cancelRetry()
+        assertTrue(gate.restorePending)
+
+        gate.completeRestore(generation)
+        assertFalse(gate.restorePending)
+        assertTrue(gate.claimRestore(generation))
+    }
+
+    @Test
+    fun aLateCookieCompletionCannotReleaseANewerRestoreOwner() {
+        val gate = RestoreAttemptGate()
+        val previous = gate.begin()
+        assertTrue(gate.claimRestore(previous))
+        val current = gate.begin()
+        assertTrue(gate.claimRestore(current))
+        var opened = false
+
+        gate.completeRestore(previous)
+        gate.callback(previous) {
+            opened = true
+            gate.completeRestore(previous)
+        }.run()
+
+        assertTrue(gate.restorePending)
+        assertFalse(opened)
+        assertFalse(gate.claimRestore(previous))
+        gate.completeRestore(current)
+        assertFalse(gate.restorePending)
+    }
+
+    @Test
+    fun invalidationReleasesLogicalOwnershipWithoutAcceptingItsLateCallback() {
+        val gate = RestoreAttemptGate()
+        val generation = gate.begin()
+        assertTrue(gate.claimRestore(generation))
+        var delivered = false
+        val callback = gate.callback(generation) { delivered = true }
+
+        gate.invalidate()
+        callback.run()
+
+        assertFalse(gate.restorePending)
+        assertFalse(delivered)
+    }
+
+    @Test
     fun aCurrentResultAndItsRetryStillRunNormally() {
         val gate = RestoreAttemptGate()
         val generation = gate.begin()

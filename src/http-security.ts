@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { addressAllowed, isLoopbackAddress, RequestTrustPolicy } from './network.js'
-import { DESKTOP_ADMIN_HEADER, DESKTOP_ADMIN_MARKER, isLocalAdminHostname } from './local-admin-host.js'
+import { addressAllowed, isLoopbackAddress, RequestTrustPolicy, type ParsedCidr } from './network.js'
+import { DESKTOP_ADMIN_HEADER, DESKTOP_ADMIN_MARKER, WEB_ADMIN_HEADER, WEB_ADMIN_MARKER, isLocalAdminHostname } from './local-admin-host.js'
 
 export const DEVICE_COOKIE = 'dsh_ma_device'
 export const SESSION_COOKIE = 'dsh_ma_session'
@@ -104,6 +104,8 @@ export function setSecurityHeaders(response: ServerResponse, tls: boolean, frami
     "font-src 'self' data:",
     "connect-src 'self'",
     "worker-src 'self' blob:",
+    // GUI plugins may fetch same-origin media into object URLs before playback.
+    ...(proxied ? ["media-src 'self' blob:"] : []),
     // `frame-src` has no allow-by-default: the sidebar browser tab embeds
     // cross-origin pages, which only an explicit frame-src admits.
     ...(proxied ? [PROXIED_FRAME_SRC] : []),
@@ -229,19 +231,24 @@ function localAuthority(header: string | undefined): { hostname: string; authori
   }
 }
 
-/** Protect the inner management route from non-loopback and DNS-rebinding callers. */
+/** Protect management with direct-peer, Host, browser-source and optional authenticated-network admission. */
 export function assertLocalAdminTrust(
   request: IncomingMessage,
   requireBrowserOrigin: boolean,
   authenticateDesktop: () => boolean = () => false,
+  adminAllowedCidrs: readonly ParsedCidr[] = [],
 ): void {
-  if (request.socket.remoteAddress === undefined || !isLoopbackAddress(request.socket.remoteAddress)) {
+  const peer = request.socket.remoteAddress
+  const loopback = peer !== undefined && isLoopbackAddress(peer)
+  if (!loopback && !addressAllowed(peer, adminAllowedCidrs)) {
     throw new HttpError(403, 'forbidden')
   }
   const host = localAuthority(request.headers.host)
   if (host === undefined || !isLocalAdminHostname(host.hostname)) {
     throw new HttpError(403, 'forbidden')
   }
+  // This prefix never grants a cross-origin preflight permission for management actions.
+  if (request.method === 'OPTIONS') throw new HttpError(403, 'forbidden')
   const site = request.headers['sec-fetch-site']
   if (site !== undefined && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'forbidden')
   const origin = request.headers.origin
@@ -260,10 +267,21 @@ export function assertLocalAdminTrust(
   // this plugin's non-simple request header. An unrelated browser origin cannot
   // send that header through CORS; a local process could already forge Origin.
   const desktopForward = site === undefined && request.headers[DESKTOP_ADMIN_HEADER] === DESKTOP_ADMIN_MARKER
-  if (requireBrowserOrigin && origin === undefined && !(desktopForward && authenticateDesktop())) {
+  const contentType = request.headers['content-type']
+  // A browser cannot attach this non-simple JSON marker across origins without
+  // a successful preflight. This management prefix must remain CORS-disabled.
+  const webRequest = request.method === 'POST'
+    && (site === undefined || site === 'same-origin')
+    && request.headers[WEB_ADMIN_HEADER] === WEB_ADMIN_MARKER
+    && request.headers[DESKTOP_ADMIN_HEADER] === undefined
+    && typeof contentType === 'string' && contentType.split(';', 1)[0]?.trim().toLowerCase() === 'application/json'
+  if (requireBrowserOrigin && origin === undefined && !webRequest && !(desktopForward && authenticateDesktop())) {
     throw new HttpError(403, 'forbidden')
   }
   if (requireBrowserOrigin && site !== undefined && site !== 'same-origin') {
     throw new HttpError(403, 'forbidden')
   }
+  // An explicit network is an additional source restriction, not an identity.
+  // The caller must validate the current request through DSH's authentication.
+  if (!loopback && !authenticateDesktop()) throw new HttpError(401, 'admin_authentication_required')
 }

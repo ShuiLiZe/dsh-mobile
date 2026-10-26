@@ -36,6 +36,24 @@ class RemotePairingTrustHttpTest {
     private val caRequiredKey = publicKey.copy(requiresCa = true)
 
     @Test
+    fun nativeAuthRequestsNegotiateIdentityButAnonymousBootstrapDoesNot() {
+        val gateway = LoopbackGateway(TestCertificates.ingressCa, 200, nativeAuth = true)
+        try {
+            NativeAuthClient.fetchPairingCa(gateway.origin)
+            val probe = NativeAuthClient.probe(gateway.origin, "D".repeat(43), TestCertificates.ingressCa, instanceId)
+            val renew = NativeAuthClient.renew(gateway.origin, "D".repeat(43), TestCertificates.ingressCa, instanceId)
+            val pair = NativeAuthClient.pair(gateway.origin, "P".repeat(43), TestCertificates.ingressCa, instanceId)
+            assertEquals("f".repeat(64), probe.installationId)
+            assertEquals("f".repeat(64), renew.installationId)
+            assertEquals("f".repeat(64), pair.installationId)
+            assertEquals("-", gateway.capabilitiesByPath["/mobile-access/ca.cer"])
+            listOf("native-probe", "native-renew", "native-pair").forEach {
+                assertEquals("installation-id", gateway.capabilitiesByPath["/mobile-access/auth/$it"])
+            }
+        } finally { gateway.close() }
+    }
+
+    @Test
     fun aPublicCaEntryWithoutCaCerKeepsThePlatformTrustStore() {
         withGateway(caCer = null) { origin ->
             val trust = selectRemoteTrust(origin, publicKey)
@@ -108,7 +126,8 @@ class RemotePairingTrustHttpTest {
     }
 
     /** A one-endpoint TLS gateway: 200 with the configured CA, or an error status, then close. */
-    private class LoopbackGateway(private val caCer: ByteArray?, private val responseStatus: Int) {
+    private class LoopbackGateway(private val caCer: ByteArray?, private val responseStatus: Int, private val nativeAuth: Boolean = false) {
+        val capabilitiesByPath = java.util.concurrent.ConcurrentHashMap<String, String>()
         private val serverSocket: SSLServerSocket =
             serverContext().serverSocketFactory.createServerSocket(0, 4, InetAddress.getByName(LOOPBACK)) as SSLServerSocket
 
@@ -143,15 +162,36 @@ class RemotePairingTrustHttpTest {
             socket.soTimeout = SOCKET_TIMEOUT_MS
             val input = socket.getInputStream().buffered()
             val requestLine = readLine(input) ?: return
-            drainHeaders(input)
-            val body = caCer?.takeIf { responseStatus == 200 && requestLine.split(' ').getOrNull(1) == CA_PATH }
+            val headers = mutableMapOf<String, String>()
+            while (true) {
+                val line = readLine(input) ?: return
+                if (line.isEmpty()) break
+                headers[line.substringBefore(':').lowercase()] = line.substringAfter(':').trim()
+            }
+            repeat(headers["content-length"]?.toIntOrNull() ?: 0) { input.read() }
+            val path = requestLine.split(' ').getOrNull(1).orEmpty()
+            capabilitiesByPath[path] = headers["x-dsh-mobile-capabilities"] ?: "-"
+            val isNative = nativeAuth && path.startsWith("/mobile-access/auth/native-")
+            val body = if (isNative) {
+                val now = System.currentTimeMillis()
+                org.json.JSONObject().apply {
+                    put("instanceId", TestCertificates.instanceIdOf(TestCertificates.ingressCa))
+                    put("deviceId", "d".repeat(32))
+                    put("installationId", "f".repeat(64))
+                    if (path.endsWith("probe") || path.endsWith("pair")) put("deviceExpiresAt", now + 60_000)
+                    if (!path.endsWith("probe")) {
+                        put("sessionToken", "S".repeat(43)); put("csrfToken", "C".repeat(43)); put("sessionExpiresAt", now + 30_000)
+                    }
+                    if (path.endsWith("pair")) put("deviceToken", "D".repeat(43))
+                }.toString().toByteArray()
+            } else caCer?.takeIf { responseStatus == 200 && path == CA_PATH }
             val output = socket.getOutputStream()
             output.write(
                 if (body == null) {
                     "HTTP/1.1 $responseStatus ${if (responseStatus == 503) "Service Unavailable" else "Not Found"}\r\n" +
                         "Content-Length: 0\r\nConnection: close\r\n\r\n"
                 } else {
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-x509-ca-cert\r\n" +
+                    "HTTP/1.1 200 OK\r\nContent-Type: ${if (isNative) "application/json" else "application/x-x509-ca-cert"}\r\n" +
                         "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n"
                 }.toByteArray(),
             )

@@ -51,6 +51,22 @@ class CredentialStorageRegressionTest {
         status = PairedDeviceStatus.REACHABLE,
     )
 
+    @Test fun authenticatedInstallationIdentityPersistsWithoutChangingLegacyRecordsOrPins() {
+        val preferences = MemoryCredentialPreferences(); val crypto = JvmCredentialEncryption()
+        val store = PairedDeviceStore(preferences, crypto)
+        val legacy = record()
+        store.upsert(legacy)
+        assertNull(PairedDeviceStore(preferences, crypto).load().single().installationId)
+        val learned = legacy.copy(installationId = "f".repeat(64))
+        store.upsert(learned)
+        val reopened = PairedDeviceStore(preferences, crypto).load().single()
+        assertEquals(learned, reopened)
+        assertEquals(legacy.instanceId, reopened.instanceId)
+        assertEquals(legacy.deviceToken, reopened.deviceToken)
+        assertThrows(IllegalArgumentException::class.java) { store.upsert(legacy.copy(installationId = "bad")) }
+        assertEquals(learned, store.load().single())
+    }
+
     @Test fun anExpiredPinnedCaKeepsAllEncryptedRowsReadableAndRepairable() {
         val preferences = MemoryCredentialPreferences()
         val crypto = JvmCredentialEncryption()
@@ -111,6 +127,39 @@ class CredentialStorageRegressionTest {
         crypto.failDecrypt = true
         assertEquals(CredentialRead.Unreadable, store.read())
         assertTrue(store.storageUnavailable)
+    }
+
+    @Test fun aRenewalCallbackCanObserveUnavailableStorageWithoutErasingPairingsOrHoldingItsWaiterUntilTimeout() {
+        val preferences = MemoryCredentialPreferences()
+        val crypto = JvmCredentialEncryption()
+        val store = PairedDeviceStore(preferences, crypto)
+        store.upsert(record())
+        assertTrue(store.read() is CredentialRead.Loaded)
+        val before = preferences.strings.toMap()
+        val replies = mutableListOf<String?>()
+        val waiter = NativeSessionRenewalGate()
+        val request = requireNotNull(waiter.begin("held-renewal", replies::add))
+        val logical = RestoreAttemptGate()
+        val generation = logical.begin()
+        assertTrue(logical.claimRestore(generation))
+        val callback = Runnable {
+            when (store.read()) {
+                CredentialRead.Unreadable -> {
+                    logical.completeRestore(generation)
+                    waiter.finish(request, "unavailable")
+                }
+                else -> throw AssertionError("Storage must become unreadable before the held result")
+            }
+        }
+        crypto.failDecrypt = true
+        callback.run()
+        assertEquals(listOf("unavailable"), replies)
+        assertFalse(waiter.pending)
+        assertFalse(logical.restorePending)
+        assertFalse(waiter.finish(request))
+        assertEquals(before, preferences.strings)
+        crypto.failDecrypt = false
+        assertEquals(listOf(record()), store.load())
     }
 
     @Test fun everyMutationRetainsCiphertextAndIvWhileKeystoreIsUnreadable() {

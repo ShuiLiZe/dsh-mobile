@@ -1249,14 +1249,27 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
     icon.append(body, lens)
     return icon
   }
-  const createMediaAction = (text: string): HTMLButtonElement => {
+  const createMediaAction = (text: string, kind: 'camera' | 'gallery' = 'camera'): HTMLButtonElement => {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'dsh-mobile-media-action'
     button.lang = language
-    button.dataset.dshMobileMediaAction = 'camera'
+    button.dataset.dshMobileMediaAction = kind
+    button.setAttribute('role', 'option')
+    button.setAttribute('aria-selected', 'false')
+    button.setAttribute('aria-label', text)
     const icon = document.createElement('span')
-    icon.append(mediaIcon())
+    const graphic = mediaIcon()
+    if (kind === 'gallery') {
+      graphic.replaceChildren()
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      path.setAttribute('d', 'M2 2h12v12H2z M2 11l4-4 3 3 2-2 3 3 M10 5h.01')
+      path.setAttribute('stroke', 'currentColor')
+      path.setAttribute('stroke-width', '1.3')
+      path.setAttribute('stroke-linejoin', 'round')
+      graphic.append(path)
+    }
+    icon.append(graphic)
     button.append(icon)
     const caption = document.createElement('span')
     caption.textContent = text
@@ -1347,6 +1360,9 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
   document.body.append(mediaToast)
   const cameraButton = createMediaAction(label('Scatta foto', 'Take photo', '拍照'))
   cameraButton.disabled = true
+  const galleryButton = createMediaAction(label('Galleria', 'Gallery', '相册'), 'gallery')
+  galleryButton.disabled = true
+  let galleryBusy = false
   let branchToastTimer = 0
   let mediaToastTimer = 0
   const showMediaToast = (message: string): void => {
@@ -1434,48 +1450,57 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
       .find(candidate => !candidate.hasAttribute('data-source') && candidate.textContent?.trim() === addGroupLabel)
     if (sectionTitle === undefined) {
       cameraButton.remove()
+      galleryButton.remove()
       return false
     }
 
     // Reuse the current DSH option classes so this injected action follows the
     // native menu's spacing, colors, and dark-mode states instead of creating a
     // second mobile-only visual language.
-    cameraButton.className = 'dsh-mobile-media-action'
     const nativeItem = (() => {
       let sibling = sectionTitle.nextElementSibling
       while (sibling instanceof HTMLElement && sibling.getAttribute('role') !== 'presentation') {
-        if (sibling.matches('button[role="option"]:not([aria-selected="true"])')) return sibling
+        if (!sibling.hasAttribute('data-dsh-mobile-media-action') && sibling.matches('button[role="option"]:not([aria-selected="true"])')) return sibling
         sibling = sibling.nextElementSibling
       }
       return undefined
     })()
-    if (nativeItem !== undefined) {
-      cameraButton.className = nativeItem.className
-      const cameraIcon = cameraButton.firstElementChild
-      const cameraLabel = cameraButton.lastElementChild
-      const nativeIcon = firstByClassSuffix(nativeItem, '_itemIcon')
-      const nativeLabel = firstByClassSuffix(nativeItem, '_itemName')
-      if (cameraIcon instanceof HTMLElement && nativeIcon !== undefined) cameraIcon.className = nativeIcon.className
-      if (cameraLabel instanceof HTMLElement && nativeLabel !== undefined) cameraLabel.className = nativeLabel.className
+    for (const button of [cameraButton, galleryButton]) {
+      const className = nativeItem?.className ?? 'dsh-mobile-media-action'
+      if (button.className !== className) button.className = className
+      const icon = button.firstElementChild
+      const caption = button.lastElementChild
+      const nativeIcon = nativeItem === undefined ? undefined : firstByClassSuffix(nativeItem, '_itemIcon')
+      const nativeLabel = nativeItem === undefined ? undefined : firstByClassSuffix(nativeItem, '_itemName')
+      if (icon instanceof HTMLElement && nativeIcon !== undefined && icon.className !== nativeIcon.className) icon.className = nativeIcon.className
+      if (caption instanceof HTMLElement && nativeLabel !== undefined && caption.className !== nativeLabel.className) caption.className = nativeLabel.className
     }
-    cameraButton.setAttribute('role', 'option')
-    cameraButton.setAttribute('aria-selected', 'false')
-    cameraButton.setAttribute('aria-label', label('Scatta foto', 'Take photo', '拍照'))
 
     let lastItem: Element = sectionTitle
     let sibling = sectionTitle.nextElementSibling
     while (sibling instanceof HTMLElement && sibling.getAttribute('role') !== 'presentation') {
-      if (sibling !== cameraButton) lastItem = sibling
+      if (sibling !== cameraButton && sibling !== galleryButton) lastItem = sibling
       sibling = sibling.nextElementSibling
     }
-    if (cameraButton.parentElement !== sectionTitle.parentElement || cameraButton.previousElementSibling !== lastItem) {
-      lastItem.after(cameraButton)
+    // Only the dedicated Mobile page promotes attachment actions. Keep every
+    // official item in its original relative order (File remains first among them).
+    if (boundComposer?.closest('.dshm-main') !== null && boundComposer !== null) {
+      if (galleryButton.parentElement !== sectionTitle.parentElement || galleryButton.previousElementSibling !== sectionTitle) sectionTitle.after(galleryButton)
+      if (cameraButton.parentElement !== galleryButton.parentElement || cameraButton.previousElementSibling !== galleryButton) galleryButton.after(cameraButton)
+    } else {
+      galleryButton.remove()
+      // Preserve the existing camera placement on stock/desktop pages.
+      if (cameraButton.parentElement !== sectionTitle.parentElement || cameraButton.previousElementSibling !== lastItem) lastItem.after(cameraButton)
     }
     return true
   }
   const setCameraActionDisabled = (disabled: boolean, title: string): void => {
     if (cameraButton.disabled !== disabled) cameraButton.disabled = disabled
     if (cameraButton.title !== title) cameraButton.title = title
+    const galleryDisabled = disabled || galleryBusy
+    if (galleryButton.disabled !== galleryDisabled) galleryButton.disabled = galleryDisabled
+    const galleryTitle = disabled ? title : label('Scegli immagini da allegare', 'Choose images to attach', '选择图片并附加到当前消息')
+    if (galleryButton.title !== galleryTitle) galleryButton.title = galleryTitle
   }
   const quietMediaPointer = (event: PointerEvent): void => {
     event.preventDefault()
@@ -1509,6 +1534,30 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
         : label('Impossibile aggiungere la foto', 'Could not attach the photo', '无法附加照片'))
     })
   }
+  const chooseGallery = (): void => {
+    if (disposed || galleryBusy || galleryButton.disabled || boundComposer?.closest('.dshm-main') == null) return
+    if (!canAcceptComposerDrop()) {
+      setCameraActionDisabled(true, label('Allegati immagine non disponibili', 'Image attachments are unavailable', '图片附件不可用'))
+      dismissCommandMenu()
+      return
+    }
+    const context = mediaRequestContext()
+    galleryBusy = true
+    galleryButton.disabled = true
+    galleryButton.setAttribute('aria-busy', 'true')
+    dismissCommandMenu()
+    void pickBrowserFiles({ accept: 'image/*', multiple: true, signal: mediaPickerAbortController.signal }).then(files => {
+      if (files !== undefined) deliverImages(files, context)
+    }).catch((_error: unknown) => {
+      if (mediaRequestIsCurrent(context)) showMediaToast(label('Impossibile aggiungere le immagini', 'Could not attach the images', '无法附加图片'))
+    }).finally(() => {
+      galleryBusy = false
+      galleryButton.removeAttribute('aria-busy')
+      if (!disposed) schedule()
+    })
+  }
+  galleryButton.addEventListener('pointerdown', quietMediaPointer)
+  galleryButton.addEventListener('click', chooseGallery)
   cameraButton.addEventListener('pointerdown', quietMediaPointer)
   cameraButton.addEventListener('click', takePhoto)
   const showBranchToast = (): void => {
@@ -1766,6 +1815,7 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
       syncMediaBinding(null)
       setCameraActionDisabled(true, label('Apri prima una sessione', 'Open a session first', '请先打开会话'))
       cameraButton.remove()
+      galleryButton.remove()
       return
     }
     if (center !== undefined) {
@@ -1810,6 +1860,7 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
         syncMediaBinding(null)
         setCameraActionDisabled(true, label('Apri prima una sessione', 'Open a session first', '请先打开会话'))
         cameraButton.remove()
+        galleryButton.remove()
       }
       if (composerRow instanceof HTMLElement) {
         composerRow.dataset.dshMobileComposerRow = 'true'
@@ -1838,7 +1889,7 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
           setCameraActionDisabled(mediaDisabled, mediaTitle)
           const commandMenu = composerCard?.querySelector<HTMLElement>('[data-trigger-menu]') ?? null
           if (commandMenu !== null) placeCameraAction(commandMenu)
-          else cameraButton.remove()
+          else { cameraButton.remove(); galleryButton.remove() }
         } else syncComposerEnterNewline(null)
         if (composerTrailing !== undefined && composerTrailing !== composerTools) {
           composerTrailing.dataset.dshMobileComposerTrailing = 'true'
@@ -1949,6 +2000,9 @@ export function installNativeMobileSurface(backServices: NativeMobileBackService
     applyStrip(0)
     cameraButton.removeEventListener('pointerdown', quietMediaPointer)
     cameraButton.removeEventListener('click', takePhoto)
+    galleryButton.removeEventListener('pointerdown', quietMediaPointer)
+    galleryButton.removeEventListener('click', chooseGallery)
+    galleryButton.remove()
     if (branchToastTimer !== 0) window.clearTimeout(branchToastTimer)
     if (mediaToastTimer !== 0) window.clearTimeout(mediaToastTimer)
     branchToast.remove()

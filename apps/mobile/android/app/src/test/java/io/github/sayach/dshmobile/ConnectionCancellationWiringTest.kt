@@ -114,7 +114,10 @@ class ConnectionCancellationWiringTest {
         assertTrue(pairing.contains("cancellation = attempt.cancellation"))
         assertTrue(pairing.contains("accessMode == mode && connectionAttempts.isCurrent(attempt)"))
         val restore = method(source, "restoreTrustedDevice")
-        assertTrue(restore.indexOf("pendingConnection ?: startConnectionAttempt(") < restore.indexOf("restoreExecutor.execute"))
+        val connectionOwner = restore.indexOf("pendingConnection ?: startConnectionAttempt(")
+        val physicalQueue = restore.indexOf("restoreWorkGate.submit(")
+        assertTrue(connectionOwner >= 0 && physicalQueue > connectionOwner)
+        assertFalse("Cancellation must not bypass the physical restore queue", restore.contains("restoreExecutor.execute"))
         assertTrue(restore.contains("cancellation = attempt.cancellation"))
         assertTrue(restore.contains("LanDiscovery.scan(this, cancellation = attempt.cancellation)"))
         assertFalse("A final asynchronous page probe still owns the connection", restore.contains("if (!recoveryScheduled) finishConnectionAttempt(attempt)"))
@@ -162,7 +165,9 @@ class ConnectionCancellationWiringTest {
     }
 
     @Test fun revealingACommittedPageRetainsCancellationAndItsOriginalConnectionDeadline() {
-        val reveal = method(activitySource(), "revealConnectionPage")
+        val source = activitySource()
+        assertTrue(method(source, "revealConnectionPage").contains("showCompactConnectionWaiting(attempt)"))
+        val reveal = method(source, "showCompactConnectionWaiting")
         assertTrue(reveal.contains("detachConnectionWaitingView()"))
         assertTrue(reveal.contains("connectionPageVisible = true"))
         assertTrue(reveal.contains("attachConnectionWaitingView()"))
@@ -175,7 +180,8 @@ class ConnectionCancellationWiringTest {
         assertTrue(reveal.contains("Gravity.BOTTOM"))
         assertTrue(reveal.contains("Gravity.END"))
         assertTrue(reveal.contains("ViewGroup.LayoutParams.WRAP_CONTENT"))
-        assertTrue("The compact button must retain the current attempt's explicit cancellation", reveal.contains("secondaryButton(R.string.connection_cancel, 48) { connectionAttempts.cancel(attempt) }"))
+        assertTrue("The compact button retains initial-connection and reconnect labels", reveal.contains("if (stopReconnecting) R.string.connection_stop_reconnecting else R.string.connection_cancel"))
+        assertTrue("The compact button must retain the current attempt's explicit cancellation", Regex("secondaryButton\\([\\s\\S]*?48,\\s*\\) \\{ connectionAttempts.cancel\\(attempt\\) }").containsMatchIn(reveal))
         assertTrue(reveal.indexOf("connectionPageVisible = true") < reveal.indexOf("attachConnectionWaitingView()"))
         for (operation in listOf("finishConnectionAttempt(", "confirmContentReady(", "connectionAttempts.finish(", "dismissConnectionProgress()", "pendingConnection =", "loadingConnectionAttempt =", "pageReadyCheck =", ".stopLoading()")) {
             assertFalse("Revealing committed content is not authentication or application completion: $operation", reveal.contains(operation))
@@ -184,7 +190,7 @@ class ConnectionCancellationWiringTest {
 
     @Test fun aLateCommitCannotRevealAnotherBrowserDocumentOrThePageOfAPendingNativeRenewal() {
         val reveal = method(activitySource(), "revealConnectionPage")
-        val detach = reveal.indexOf("detachConnectionWaitingView()")
+        val detach = reveal.indexOf("showCompactConnectionWaiting(attempt)")
         assertTrue(detach >= 0)
         for (condition in listOf("webView !== browser", "loadingConnectionAttempt !== attempt", "connectionAttempts.isCurrent(attempt)", "currentDocumentGeneration")) {
             val guard = reveal.indexOf(condition)
@@ -220,7 +226,7 @@ class ConnectionCancellationWiringTest {
         val start = method(source, "startConnectionAttempt")
         assertTrue(start.contains("if (preserveBrowser != null && webView === preserveBrowser) recoveryStoppedBrowser = preserveBrowser"))
         assertTrue(start.contains("cancelAutomaticRecovery()"))
-        assertTrue(start.contains("invalidateRestoreAttempts()"))
+        assertTrue(start.contains("invalidateRestoreAttempts(if (reason == ConnectionAttemptController.Reason.TIMED_OUT) \"timeout\" else \"cancelled\")"))
         assertTrue(start.contains("invalidatePairingAttempts()"))
         val canRecover = method(source, "canRecoverAutomatically")
         val stopped = canRecover.indexOf("if (webView != null && recoveryStoppedBrowser === webView) return false")

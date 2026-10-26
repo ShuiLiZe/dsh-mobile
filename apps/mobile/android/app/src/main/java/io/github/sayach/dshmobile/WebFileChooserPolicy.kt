@@ -39,6 +39,7 @@ internal class WebFileChooserRequestCodes {
 internal class WebFileChooserGate<T>(private val codes: WebFileChooserRequestCodes) {
     internal data class Pending<T>(val requestCode: Int, val value: T)
     private var pending: Pending<T>? = null
+    val active: Boolean get() = pending != null
 
     fun begin(value: T): Pending<T>? {
         if (pending != null) return null

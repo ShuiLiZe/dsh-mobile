@@ -3,8 +3,8 @@
  *
  * Plain ESM on purpose: no TypeScript imports, no vitest. It drives the REAL
  * bundled ExtensionWorkerHost against the REAL worker runtime entry while the
- * worker thread is synchronously blocked, then prints a JSON verdict and exits.
- * The vitest wrapper supervises this process with a hard timeout.
+ * worker thread is synchronously blocked. A separate regression delays HTTP
+ * observation until worker exit. The wrapper supervises both with a hard timeout.
  */
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url'
 
 const runtimeEntry = process.argv[2]
 const supervisorBundle = process.argv[3]
+const lateObservation = process.argv[4] === '--late-observation'
 if (runtimeEntry === undefined || supervisorBundle === undefined) {
   console.error('usage: node extension-worker-blocking-runner.mjs <runtime-entry> <supervisor-bundle>')
   process.exit(2)
@@ -62,7 +63,10 @@ export default (api) => {
     const { host, activation } = await makeHost(root, 'a1')
     const caller = { signal: new AbortController().signal, deviceId: 'device' }
 
-    const spin = host.invoke('spin', {}, caller)
+    const spin = host.invoke('spin', {}, caller).then(
+      value => ({ status: 'fulfilled', value }),
+      error => ({ status: 'rejected', error }),
+    )
     // Wait until the worker has actually entered its blocking loop.
     const { existsSync } = await import('node:fs')
     const startedAt = Date.now()
@@ -70,12 +74,27 @@ export default (api) => {
       if (Date.now() - startedAt > 2_000) throw new Error('worker never signaled it started blocking')
       await new Promise(resolve => { setTimeout(resolve, 20) })
     }
-    // While the worker thread is blocked, the parent loop must stay responsive.
+    // Delay this regression's HTTP observation until after the worker deadline
+    // and exit, without using a timing-dependent sleep.
+    if (lateObservation) {
+      let exitGuard
+      try {
+        await Promise.race([
+          host.whenExited(),
+          new Promise((_, reject) => {
+            exitGuard = setTimeout(() => { reject(new Error('worker did not exit before delayed HTTP observation')) }, 4_000)
+          }),
+        ])
+      } finally { if (exitGuard !== undefined) clearTimeout(exitGuard) }
+    }
+    // The normal scenario checks responsiveness while the worker is blocked.
     const pong = await fetch(`http://127.0.0.1:${port}/ping`)
-    const responsive = pong.status === 200 && Date.now() - startedAt < 3_000
+    const responsive = !lateObservation && pong.status === 200 && Date.now() - startedAt < 3_000
+    const httpAfterExit = lateObservation && pong.status === 200
 
-    let timedOut = false
-    try { await spin } catch (error) { timedOut = error?.code === 'extension_action_timeout' }
+    const spinResult = await spin
+    if (spinResult.status === 'rejected' && spinResult.error?.code !== 'extension_action_timeout') throw spinResult.error
+    const timedOut = spinResult.status === 'rejected' && spinResult.error?.code === 'extension_action_timeout'
 
     // Deadline fired but the worker never settles: the supervisor's own
     // cleanup grace must terminate the blocked worker without our help.
@@ -91,7 +110,7 @@ export default (api) => {
     const recovered = probe.bytes.toString('utf8') === '{"ok":true}'
     await second.host.terminate('done')
     await new Promise(resolve => { server.closeAllConnections?.(); server.close(() => resolve()) })
-    return { responsive, timeout: timedOut, terminated, recovered, runtimeRotated }
+    return { responsive, httpAfterExit, timeout: timedOut, terminated, recovered, runtimeRotated }
   } finally {
     await rm(root, { recursive: true, force: true })
   }

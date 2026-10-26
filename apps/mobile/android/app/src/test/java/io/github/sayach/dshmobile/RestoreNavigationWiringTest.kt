@@ -31,7 +31,44 @@ class RestoreNavigationWiringTest {
         assertTrue(methodBody(activity, "scheduleAutomaticRecovery").contains("restoreAttemptGate.retryCallback"))
         val restore = methodBody(activity, "restoreTrustedDevice")
         assertTrue(restore.contains("runOnUiThread(restoreAttemptGate.callback(generation)"))
-        assertTrue(restore.contains("isCurrent = { restoreAttemptGate.isCurrent(generation) && connectionAttempts.isCurrent(attempt) }"))
+        assertTrue(restore.contains("isCurrent = { restoreAttemptGate.isCurrent(generation) && connectionAttempts.isCurrent(attempt) && requestIsCurrent() && claimSuccess() }"))
+    }
+
+    @Test
+    fun repeatedMainDocumentFailuresCoalesceUntilTheCurrentRenewalInstallsItsCookies() {
+        val activity = activitySource()
+        val schedule = methodBody(activity, "scheduleAutomaticRecovery")
+        assertTrue(schedule.indexOf("restoreAttemptGate.restorePending") < schedule.indexOf("recoveryHandler.postDelayed"))
+        val restore = methodBody(activity, "restoreTrustedDevice")
+        val claim = restore.indexOf("restoreAttemptGate.claimRestore(generation)")
+        val physical = restore.indexOf("restoreWorkGate.submit(")
+        val renew = restore.indexOf("NativeAuthClient.renew(")
+        assertTrue(claim >= 0 && physical > claim && renew > physical)
+        assertFalse("The restore worker must not bypass the per-credential physical slot", restore.contains("restoreExecutor.execute"))
+        val cookies = restore.substringAfter("installNativeSession(")
+        assertTrue(cookies.indexOf("restoreAttemptGate.completeRestore(generation)") < cookies.indexOf("showBrowser("))
+        assertTrue(cookies.contains("isCurrent = { restoreAttemptGate.isCurrent(generation) && connectionAttempts.isCurrent(attempt) && requestIsCurrent() && claimSuccess() }"))
+    }
+
+    @Test
+    fun nativeRestoreRejectionAndFailureReleaseLogicalOwnershipBeforeSchedulingRetry() {
+        val restore = methodBody(activitySource(), "restoreTrustedDevice")
+        val rejection = restore.substringAfter("onRejected = {").substringBefore(") restore@")
+        assertTrue(rejection.indexOf("restoreAttemptGate.completeRestore(generation)") < rejection.indexOf("onFailure("))
+        // Restrict to the final disposition rather than a nested status-selection branch.
+        val finalFailure = restore.substringBefore("onFailure(finalDisposition)")
+        assertTrue(finalFailure.trimEnd().endsWith("restoreAttemptGate.completeRestore(generation)"))
+    }
+
+    @Test
+    fun anEndedConnectionCannotLeaveALogicalRestoreOwnerAfterACookieCallbackIsWithdrawn() {
+        val finish = methodBody(activitySource(), "finishConnectionAttempt")
+        assertTrue(finish.indexOf("connectionAttempts.finish(attempt)") < finish.indexOf("restoreAttemptGate.completeRestore(restoreGeneration)"))
+        assertTrue(finish.indexOf("restoreAttemptGate.completeRestore(restoreGeneration)") < finish.indexOf("pendingConnection = null"))
+        val restore = methodBody(activitySource(), "restoreTrustedDevice")
+        val result = restore.substringAfter("val failureKind =").substringBefore("if (deviceKey != null)")
+        assertTrue(result.contains("!connectionAttempts.isCurrent(attempt)"))
+        assertTrue(result.contains("restoreAttemptGate.completeRestore(generation)"))
     }
 
     @Test
