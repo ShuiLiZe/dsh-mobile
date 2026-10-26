@@ -1,0 +1,205 @@
+package io.github.sayach.dshmobile
+
+import android.animation.TimeInterpolator
+import android.content.Context
+import android.content.res.Resources
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.RippleDrawable
+import android.animation.ValueAnimator
+import android.content.res.ColorStateList
+import android.provider.Settings
+import android.view.View
+import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
+import android.widget.ImageView
+import android.widget.TextView
+import kotlin.math.roundToInt
+
+/**
+ * Shared measurements for the native pages.
+ *
+ * Every screen uses one 8dp rhythm, one type scale and one set of corner radii so the
+ * native surfaces read like the DSH shell instead of a stack of platform defaults.
+ * Colors still come from [DshNativeTheme]; this file only owns geometry and motion.
+ */
+internal object DshNativeDimens {
+    /** Corner radius of a list row or a grouped card. */
+    const val CARD_RADIUS = 20
+    /** Corner radius of a bottom sheet's leading edge. */
+    const val SHEET_RADIUS = 28
+    /** Corner radius of a primary action. */
+    const val PRIMARY_RADIUS = 16
+    /** Corner radius of a secondary action or a text field. */
+    const val SECONDARY_RADIUS = 14
+    /** Grid unit. All spacing is a multiple of it. */
+    const val GRID = 8
+    /** Smallest accepted tap target. */
+    const val TOUCH_TARGET = 48
+    /** Short, non-decorative transition used for page fades and sheet entry. */
+    const val MOTION_MS = 200L
+    /** Widest column a form is allowed to occupy on a tablet. */
+    const val CONTENT_MAX_WIDTH = 560
+
+    /** Space above and below the page content. */
+    const val PAGE_VERTICAL = 32
+    /** Space between the screen edge and the content column. */
+    const val PAGE_GUTTER = 24
+
+    fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).roundToInt()
+
+    fun Int.dp(context: Context): Int = dp(context, this)
+
+    fun px(resources: Resources, value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+}
+
+/** Native type scale, in sp, always with an explicit weight and line height. */
+internal object DshNativeType {
+    const val DISPLAY = 30f
+    const val TITLE = 24f
+    const val SECTION = 17f
+    const val CARD_TITLE = 18f
+    const val BODY = 15f
+    const val CAPTION = 13f
+    const val LABEL = 12f
+
+    const val LINE_DISPLAY = 1.2f
+    const val LINE_TITLE = 1.25f
+    const val LINE_BODY = 1.45f
+    const val LINE_CAPTION = 1.35f
+}
+
+/** Centralised motion policy so a system request to reduce animation is honoured once. */
+internal object DshNativeMotion {
+    fun animationsEnabled(context: Context): Boolean {
+        val scale = Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        val transition = Settings.Global.getFloat(context.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f)
+        return scale > 0f && transition > 0f
+    }
+
+    fun interpolator(): TimeInterpolator = DecelerateInterpolator()
+
+    /** Fades a view in unless the system asks for static content. */
+    fun fadeIn(view: View, context: Context, startDelayMs: Long = 0L) {
+        if (!animationsEnabled(context)) {
+            view.alpha = 1f
+            return
+        }
+        view.alpha = 0f
+        view.animate().alpha(1f).setStartDelay(startDelayMs)
+            .setDuration(DshNativeDimens.MOTION_MS).setInterpolator(interpolator()).start()
+    }
+
+    /** Runs [onEnd] immediately when animation is disabled. */
+    fun fadeOut(view: View, context: Context, onEnd: (() -> Unit)? = null) {
+        if (!animationsEnabled(context)) {
+            if (onEnd != null) onEnd() else view.alpha = 0f
+            return
+        }
+        view.animate().alpha(0f).setDuration(DshNativeDimens.MOTION_MS)
+            .setInterpolator(interpolator()).withEndAction { onEnd?.invoke() }.start()
+    }
+
+    /** 150–240ms pulse used by the waiting indicator instead of a spinning platform spinner. */
+    fun pulse(view: View, context: Context) {
+        if (!animationsEnabled(context)) return
+        val from = 0.55f
+        val to = 1f
+        view.alpha = from
+        ValueAnimator.ofFloat(from, to).apply {
+            duration = DshNativeDimens.MOTION_MS
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            addUpdateListener { view.alpha = it.animatedValue as Float }
+            start()
+        }
+    }
+}
+
+/** Drawable factories that keep strokes, radii and press feedback consistent. */
+internal object DshNativeShapes {
+    fun surface(context: Context, fillColor: Int, radiusDp: Int, strokeColor: Int? = null): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(fillColor)
+            cornerRadius = DshNativeDimens.dp(context, radiusDp).toFloat()
+            if (strokeColor != null) setStroke(DshNativeDimens.dp(context, 1), strokeColor)
+        }
+
+    /** Rounds only the top corners, for a bottom sheet panel. */
+    fun sheet(context: Context, fillColor: Int, radiusDp: Int, strokeColor: Int): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(fillColor)
+            cornerRadii = floatArrayOf(
+                DshNativeDimens.dp(context, radiusDp).toFloat(), DshNativeDimens.dp(context, radiusDp).toFloat(),
+                DshNativeDimens.dp(context, radiusDp).toFloat(), DshNativeDimens.dp(context, radiusDp).toFloat(),
+                0f, 0f, 0f, 0f,
+            )
+            setStroke(DshNativeDimens.dp(context, 1), strokeColor)
+        }
+
+    fun pressable(context: Context, fillColor: Int, radiusDp: Int, rippleColor: Int, strokeColor: Int? = null): RippleDrawable =
+        RippleDrawable(
+            ColorStateList.valueOf(rippleColor),
+            surface(context, fillColor, radiusDp, strokeColor),
+            null,
+        )
+
+    /** A ring used behind the DSH mark on the waiting page. */
+    fun ring(context: Context, fillColor: Int, radiusDp: Int, strokeColor: Int): LayerDrawable {
+        val ring = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(fillColor)
+            setStroke(DshNativeDimens.dp(context, 1), strokeColor)
+        }
+        return LayerDrawable(arrayOf(ring))
+    }
+
+    fun dot(context: Context, color: Int, diameterDp: Int): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(color)
+        setSize(DshNativeDimens.dp(context, diameterDp), DshNativeDimens.dp(context, diameterDp))
+    }
+}
+
+/**
+ * Applies one typographic rule to any text view: size, weight, line height and colour
+ * all come from a single place, so individual screens cannot drift apart.
+ */
+internal fun TextView.applyDshType(
+    sizeSp: Float,
+    style: Int,
+    color: Int,
+    lineHeight: Float? = null,
+    letterSpacingEm: Float = 0f,
+) {
+    textSize = sizeSp
+    setTypeface(Typeface.DEFAULT, style)
+    setTextColor(color)
+    includeFontPadding = false
+    setLineSpacing(0f, lineHeight ?: when {
+        sizeSp >= 24f -> DshNativeType.LINE_TITLE
+        sizeSp >= 15f -> DshNativeType.LINE_BODY
+        else -> DshNativeType.LINE_CAPTION
+    })
+    this.letterSpacing = letterSpacingEm
+    if (paintFlags and Paint.SUBPIXEL_TEXT_FLAG == 0) paintFlags = paintFlags or Paint.SUBPIXEL_TEXT_FLAG
+}
+
+/** Scales a single line of icon at a fixed frame so rows keep an identical right edge. */
+/** Lightweight alternative to a text watcher: runs [block] after every text change. */
+internal fun TextView.afterDshTextChanged(block: (CharSequence) -> Unit) {
+    addTextChangedListener(object : android.text.TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = block(s ?: "")
+
+        override fun afterTextChanged(s: android.text.Editable?) = Unit
+    })
+}
+
+internal fun ImageView.frameIcon(sizeDp: Int, context: Context) {
+    scaleType = ImageView.ScaleType.FIT_CENTER
+    layoutParams = ViewGroup.LayoutParams(DshNativeDimens.dp(context, sizeDp), DshNativeDimens.dp(context, sizeDp))
+}

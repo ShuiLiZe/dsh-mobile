@@ -8,5 +8,20 @@
         <item name="android:navigationBarColor">@color/app_background</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
+        <!-- Native pages draw their own spacing; no platform divider strips. -->
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+
+    <!-- Themed text field used by native forms: no platform underline, tinted rounded box
+         is applied in code so it can follow the synchronized DSH palette. -->
+    <style name="DshNativeField">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">@color/app_foreground</item>
+        <item name="android:textColorHint">@color/app_secondary</item>
+        <item name="android:background">@null</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:gravity">center_vertical</item>
     </style>
 </resources>
