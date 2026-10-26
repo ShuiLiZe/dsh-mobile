@@ -207,8 +207,8 @@ internal fun ImageView.frameIcon(sizeDp: Int, context: Context) {
 /**
  * The thin ring loader DSH's own web shell shows while it boots: a hairline track with a
  * quarter arc turning at a steady pace. The native waiting page uses the same mark, size and
- * position so handing over to the web loader is seamless. When the system asks to reduce
- * animation the arc stays still.
+ * position so handing over to the web loader is seamless. Like the web loader it keeps turning
+ * even when the system animator scale is off.
  */
 internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) : View(context) {
     private val stroke = DshNativeDimens.dp(context, 2).toFloat()
@@ -225,16 +225,7 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
         color = arcColor
     }
     private val bounds = android.graphics.RectF()
-    private var angle = -90f
-    private val spin: ValueAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
-        duration = SPIN_MS
-        repeatCount = ValueAnimator.INFINITE
-        interpolator = android.view.animation.LinearInterpolator()
-        addUpdateListener {
-            angle = -90f + it.animatedValue as Float
-            invalidate()
-        }
-    }
+    private var spinning = false
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -245,17 +236,30 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
         val inset = stroke / 2f
         bounds.set(inset, inset, width - inset, height - inset)
         canvas.drawOval(bounds, track)
+        // Driven by the frame clock rather than ValueAnimator: many phones run with the system
+        // animator scale at 0 (developer options, battery savers), which froze the ring into a
+        // plain circle. DSH's web loader keeps turning in that case, so this one does too.
+        val angle = -90f + (android.os.SystemClock.uptimeMillis() % SPIN_MS) * 360f / SPIN_MS
         canvas.drawArc(bounds, angle, ARC_SWEEP, false, arc)
+        if (spinning) postInvalidateOnAnimation()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (DshNativeMotion.animationsEnabled(context)) spin.start()
+        spinning = true
+        postInvalidateOnAnimation()
     }
 
     override fun onDetachedFromWindow() {
-        spin.cancel()
+        spinning = false
         super.onDetachedFromWindow()
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        val shouldSpin = isVisible && isAttachedToWindow
+        if (shouldSpin && !spinning) postInvalidateOnAnimation()
+        spinning = shouldSpin
     }
 
     private companion object {
