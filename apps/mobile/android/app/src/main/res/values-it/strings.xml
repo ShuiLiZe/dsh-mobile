@@ -199,4 +199,20 @@
     <string name="same_host_detect">Rileva e chiedi</string>
     <string name="same_host_switched">Cambio automatico della connessione in corso…</string>
     <string name="same_host_migration_retained">Migrazione non completata. La pagina originale è stata mantenuta.</string>
+    <string name="selected">Selezionato</string>
+    <string name="empty_devices_title">Nessun computer associato</string>
+    <string name="empty_devices_description">Associa una volta il DSH in esecuzione sul computer. Dopo, questo telefono si riconnette senza chiedere.</string>
+    <string name="empty_devices_lan_hint">Stessa rete Wi-Fi: scansiona il codice QR mostrato da DSH sul computer.</string>
+    <string name="empty_devices_manual_hint">Hai già un indirizzo? Inserisci direttamente l\'indirizzo HTTPS.</string>
+    <string name="devices_section_title">Computer</string>
+    <string name="devices_settings_section_title">Preferenze</string>
+    <string name="connection_section_title">Accesso</string>
+    <string name="waiting_title">Connessione</string>
+    <string name="waiting_hint">Mantieni DSH in esecuzione sul computer. Puoi annullare in qualsiasi momento.</string>
+    <string name="launch_settings_description">Scegli cosa apre l\'app. L\'elenco dispositivi tiene ogni computer associato a un tocco di distanza.</string>
+    <string name="launch_direct_dsh_description">Salta l\'elenco e si riconnette all\'ultimo computer.</string>
+    <string name="launch_device_list_description">Apre prima questa schermata per scegliere il computer.</string>
+    <string name="same_host_manual_description">Cambia solo quando tocchi un computer associato.</string>
+    <string name="same_host_detect_description">Rileva l\'altra connessione e chiede prima di cambiare.</string>
+    <string name="same_host_enable_description">Cambia da solo e te lo comunica dopo.</string>
 </resources>

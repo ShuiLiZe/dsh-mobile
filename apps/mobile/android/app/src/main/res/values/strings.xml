@@ -198,4 +198,20 @@
     <string name="same_host_detect">Detect and ask</string>
     <string name="same_host_switched">Switching connection automatically…</string>
     <string name="same_host_migration_retained">Migration did not complete. The original page has been kept.</string>
+    <string name="selected">Selected</string>
+    <string name="empty_devices_title">No paired computers yet</string>
+    <string name="empty_devices_description">Pair with the DSH running on your computer once. Afterwards this phone reconnects without asking.</string>
+    <string name="empty_devices_lan_hint">Same Wi-Fi: scan the QR code shown in DSH on the computer.</string>
+    <string name="empty_devices_manual_hint">Already have an address? Enter the HTTPS address instead.</string>
+    <string name="devices_section_title">Computers</string>
+    <string name="devices_settings_section_title">Preferences</string>
+    <string name="connection_section_title">Access</string>
+    <string name="waiting_title">Connecting</string>
+    <string name="waiting_hint">Keep DSH running on the computer. You can cancel at any time.</string>
+    <string name="launch_settings_description">Choose what the launcher opens. The device list keeps every paired computer one tap away.</string>
+    <string name="launch_direct_dsh_description">Skips the list and reconnects to the last computer.</string>
+    <string name="launch_device_list_description">Opens this screen first so you can pick a computer.</string>
+    <string name="same_host_manual_description">Switches only when you tap a paired computer.</string>
+    <string name="same_host_detect_description">Notices the other connection and asks before switching.</string>
+    <string name="same_host_enable_description">Switches on its own and tells you afterwards.</string>
 </resources>
