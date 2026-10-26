@@ -91,7 +91,7 @@ class ConnectionCancellationWiringTest {
         }
         val waiting = method(source, "startConnectionAttempt")
         assertTrue(waiting.contains("resolveWebViewSafeArea(insets)"))
-        assertTrue(waiting.contains("scroll.setPadding(dp(32) + edges.left"))
+        assertTrue(waiting.contains("content.setPadding(dp(32) + edges.left"))
         val attach = method(source, "attachConnectionWaitingView")
         assertTrue(attach.contains("waiting.dispatchApplyWindowInsets(it)"))
         assertTrue(attach.contains("container.requestApplyInsets()"))
