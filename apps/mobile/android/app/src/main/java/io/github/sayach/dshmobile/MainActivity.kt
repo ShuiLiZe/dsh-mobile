@@ -354,8 +354,15 @@ class MainActivity : Activity() {
         lastForegroundProbeAt = now
         if (!canRecoverAutomatically()) return
         if (recoveryScheduled) return
-        // A resumed page falls back to the mounted-page path so a live document is not reloaded.
-        if (!scheduleAutomaticRecovery()) return
+        val browser = webView ?: return
+        val origin = gatewayOrigin ?: return
+        // A page DSH still has mounted reconnects on its own, so coming back from the background
+        // never flashes the native loader over it; only a lost page goes through recovery.
+        probeMountedDshPage(browser, origin) { mounted ->
+            if (mounted || isFinishing || isDestroyed || webView !== browser
+                || pendingConnection != null || recoveryScheduled) return@probeMountedDshPage
+            if (!scheduleAutomaticRecovery()) return@probeMountedDshPage
+        }
     }
 
     override fun onPause() {
@@ -3256,17 +3263,6 @@ class MainActivity : Activity() {
     }
 
     /** HTML completion alone does not release the initial connection's cancel button or deadline. */
-    /** Copy the arc of DSH's boot spinner (hidden behind the native loader) onto the native ring. */
-    private fun mirrorDshBootProgress(browser: WebView) {
-        val spinner = connectionLoaderSpinner ?: return
-        runCatching {
-            browser.evaluateJavascript(DSH_BOOT_ARC_PROBE) { result ->
-                if (connectionLoaderSpinner !== spinner || webView !== browser) return@evaluateJavascript
-                dshBootArcDegrees(result)?.let(spinner::setProgressSweep)
-            }
-        }
-    }
-
     private fun finishConnectionWhenPageReady(
         browser: WebView,
         origin: GatewayOrigin,
@@ -4152,8 +4148,6 @@ class MainActivity : Activity() {
 
     private companion object {
         const val CANCEL_PILL_BOTTOM_DP = 32
-        const val DSH_BOOT_ARC_PROBE =
-            "(() => { const s = document.querySelector('[data-dsh-boot-spinner]'); return s ? s.style.getPropertyValue('--dsh-boot-arc') : '' })()"
         const val PREFERENCES_NAME = "dsh_mobile"
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"
