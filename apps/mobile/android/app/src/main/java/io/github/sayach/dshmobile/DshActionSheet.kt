@@ -272,13 +272,27 @@ internal class DshActionSheet(context: Context) : Dialog(context, R.style.DshAct
         }
         if (rows.isNotEmpty() && (confirmLabel != null || alternateLabel != null)) panel.addView(spacerView(16))
         alternateLabel?.let { label ->
-            panel.addView(sheetButton(label, primary = false, destructive = false, onClick = {
-                // Cancel, skip and the second of two choices always close the sheet, like the
-                // platform dialog buttons they replace.
-                onAlternate?.invoke()
-                dismiss()
-            }))
-            panel.addView(spacerView(8))
+            // The quiet action is a hairline pill, the same one the connecting screen uses, so it
+            // never competes with the rows or the primary action.
+            val quiet = quietPill(context, label, secondaryColor(), borderColor(), tintedColor()).apply {
+                setOnClickListener {
+                    // Cancel, skip and the second of two choices always close the sheet, like the
+                    // platform dialog buttons they replace.
+                    onAlternate?.invoke()
+                    dismiss()
+                }
+            }
+            if (confirmLabel != null) {
+                // Above a primary action the pill would float awkwardly; keep it full width.
+                quiet.minHeight = pad(48)
+                panel.addView(quiet, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                panel.addView(spacerView(8))
+            } else {
+                panel.addView(quiet, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    topMargin = pad(8)
+                })
+            }
         }
         confirmLabel?.let { label ->
             val button = sheetButton(label, primary = true, destructive = confirmDestructive, onClick = {

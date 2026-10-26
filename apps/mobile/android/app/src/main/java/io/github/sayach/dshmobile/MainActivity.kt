@@ -654,7 +654,9 @@ class MainActivity : Activity() {
         addView(TextView(this@MainActivity).apply {
             text = getString(R.string.dsh_loader_wordmark)
             gravity = Gravity.CENTER
-            applyDshType(14f, Typeface.BOLD, themeColor(R.color.app_foreground), letterSpacingEm = 0.18f)
+            applyDshType(16f, Typeface.NORMAL, themeColor(R.color.app_foreground), letterSpacingEm = 0.1f)
+            // DSH's web wordmark is medium weight, not bold.
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(spacer(20))
