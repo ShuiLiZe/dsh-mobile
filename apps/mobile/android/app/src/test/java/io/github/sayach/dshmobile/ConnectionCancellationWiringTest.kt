@@ -200,7 +200,7 @@ class ConnectionCancellationWiringTest {
         assertFalse("A retained old document cannot reveal or finish a pending native request", reveal.contains("pendingConnection ?:"))
     }
 
-    @Test fun replacingTheDocumentRestoresFullWaitingWithoutResettingTheConnectionBudget() {
+    @Test fun replacingTheDocumentKeepsTheRevealedPageWithoutResettingTheConnectionBudget() {
         val source = activitySource()
         val restore = method(source, "restoreConnectionWaitingScreen")
         assertTrue(restore.contains("if (!connectionPageVisible) return"))
@@ -215,7 +215,8 @@ class ConnectionCancellationWiringTest {
         val browser = method(source, "showBrowser")
         assertTrue(browser.contains("restoreConnectionWaitingScreen()"))
         val withdraw = browser.substringAfter("fun withdrawPageReadiness()").substringBefore("fun inspectVisibleContent(")
-        assertTrue(withdraw.contains("restoreConnectionWaitingScreen()"))
+        assertTrue(withdraw.contains("loadingDocumentGeneration = null"))
+        assertFalse("A revealed page keeps DSH's own loader on screen across a replacement document", withdraw.contains("restoreConnectionWaitingScreen()"))
         val dismiss = method(source, "dismissConnectionProgress")
         assertTrue(dismiss.contains("connectionFullWaitingView = null"))
         assertTrue(dismiss.contains("connectionFullCancelButton = null"))

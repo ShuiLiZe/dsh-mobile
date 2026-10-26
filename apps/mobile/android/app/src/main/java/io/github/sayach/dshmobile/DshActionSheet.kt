@@ -184,7 +184,8 @@ internal class DshActionSheet(context: Context) : Dialog(context, R.style.DshAct
         scrim = View(context).apply {
             setBackgroundColor(withOpacity(foregroundColor(), SCRIM_ALPHA))
             isClickable = true
-            setOnClickListener { dismiss() }
+            // A scrim tap is a cancel, like back: cancel listeners run before the sheet closes.
+            setOnClickListener { cancel() }
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         panel = LinearLayout(context).apply {
@@ -271,11 +272,22 @@ internal class DshActionSheet(context: Context) : Dialog(context, R.style.DshAct
         }
         if (rows.isNotEmpty() && (confirmLabel != null || alternateLabel != null)) panel.addView(spacerView(16))
         alternateLabel?.let { label ->
-            panel.addView(sheetButton(label, primary = false, destructive = false, onClick = { onAlternate?.invoke() }))
+            panel.addView(sheetButton(label, primary = false, destructive = false, onClick = {
+                // Cancel, skip and the second of two choices always close the sheet, like the
+                // platform dialog buttons they replace.
+                onAlternate?.invoke()
+                dismiss()
+            }))
             panel.addView(spacerView(8))
         }
         confirmLabel?.let { label ->
-            val button = sheetButton(label, primary = true, destructive = confirmDestructive, onClick = { onConfirm?.invoke() })
+            val button = sheetButton(label, primary = true, destructive = confirmDestructive, onClick = {
+                // The primary action closes the sheet unless its handler asked to stay open, for
+                // example to keep an invalid name on screen.
+                dismissAfterAction = true
+                onConfirm?.invoke()
+                if (dismissAfterAction) dismiss()
+            })
             if (confirmDisabled) {
                 button.isEnabled = false
                 button.alpha = 0.45f

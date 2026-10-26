@@ -1248,6 +1248,7 @@ class MainActivity : Activity() {
             .confirm(R.string.save, enabled = isValidDeviceName(device.displayName)) {
                 val name = normalizeDeviceName(sheet.inputText().orEmpty())
                 if (!isValidDeviceName(name)) {
+                    sheet.dismissAfterAction = false
                     Toast.makeText(this, R.string.invalid_device_name, Toast.LENGTH_SHORT).show()
                 } else {
                     if (withCredentialStorage { pairedDeviceStore.update(device.key) { it.copy(displayName = name) } } == null) return@confirm
@@ -2450,6 +2451,7 @@ class MainActivity : Activity() {
             .confirm(R.string.save_and_connect, enabled = isValidDeviceName(record.displayName)) {
                 val name = normalizeDeviceName(prompt.inputText().orEmpty())
                 if (!isValidDeviceName(name)) {
+                    prompt.dismissAfterAction = false
                     Toast.makeText(this, R.string.invalid_device_name, Toast.LENGTH_SHORT).show()
                 } else {
                     if (withCredentialStorage { pairedDeviceStore.update(record.key) { it.copy(displayName = name) } } == null) return@confirm
@@ -2663,13 +2665,12 @@ class MainActivity : Activity() {
                 .title(R.string.same_host_switch_title)
                 .message(R.string.same_host_switch_warning)
                 .confirm(R.string.same_host_switch_confirm) { connect() }
-                .alternate(getString(R.string.cancel)) { }
+                .alternate(getString(R.string.cancel)) { finishConnectionAttempt() }
                 .build()
                 .also { sheet ->
-                    sheet.setOnDismissListener {
-                        sameHostConfirmation = null
-                        finishConnectionAttempt()
-                    }
+                    // Only cancel, back or a scrim tap ends the attempt; confirming connects.
+                    sheet.setOnCancelListener { finishConnectionAttempt() }
+                    sheet.setOnDismissListener { sameHostConfirmation = null }
                     sameHostConfirmation = sheet
                     sheet.show()
                 }
@@ -3454,10 +3455,12 @@ class MainActivity : Activity() {
         }
         fun ownsBrowser(): Boolean = webView === browser && gatewayOrigin == origin && !isFinishing && !isDestroyed
         fun withdrawPageReadiness() {
+            // A replacement document only withdraws the readiness confirmation. Once the page
+            // has been revealed it stays on screen with the compact cancel control, so DSH's own
+            // loader flows straight into the app instead of flashing the native waiting page.
             loadingDocumentGeneration = null
             pageReadyCheck?.let(restoreUiHandler::removeCallbacks)
             pageReadyCheck = null
-            restoreConnectionWaitingScreen()
         }
         fun inspectVisibleContent(generation: Int) {
             val attempt = loadingConnectionAttempt ?: return
