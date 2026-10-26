@@ -27,10 +27,23 @@ In WebView controls, inherit DSH's system font stack. Use at least 16 CSS pixels
 
 Keep per-Origin mobile font preferences separate from App-wide WebView zoom. Show advanced typography only when the theme consumes its public tokens; a terminal canvas needs its own supported font control. Native text uses scaled text units (`sp`), while native geometry uses `dp`; neither is a raw device pixel.
 
+## Native surfaces
+
+The APK draws several screens itself (device list and its empty state, connection centre, LAN/remote setup, pairing, the connection wait, failure sheets and the scanner). They share `DshNativeUi` for spacing, type, motion and shapes, and every colour comes from `DshNativeTheme` with the `res/values(-night)/colors.xml` fallback.
+
+- One hierarchy per screen: a 30sp display title with a 15sp caption directly beneath it, 17sp bold section labels for field groups, 15sp body copy and 13sp captions. Nothing competes at the same weight.
+- Spacing is an 8dp grid (8/12/16/20/24/32); pages get a 32dp vertical gutter and a 24dp horizontal gutter with a 560dp content cap.
+- Device rows carry a mode tag, the device name, the origin and a status line with a coloured dot, then a monospace-free platform icon and a chevron; the whole row is the 48dp+ target and presses with `interactive-bg`.
+- Empty states reuse the DSH mark at 40dp with one sentence and the scan / manual-address pair, rather than a bare blank list.
+- Menus are a DSH action sheet, not an `AlertDialog` list: a scrim, a 28dp-top-rounded panel, single-choice rows with a checkmark and a description, and one destructive action at most.
+- The connection wait is a centred 64dp DSH mark, a 2dp hairline progress line, the status text and a cancel button, revealed with a 200ms fade.
+- The scanner keeps a dark immutable surface for camera contrast, but its brackets, hint, pill and close target follow the same radii and type scale.
+
 ## Shape and depth
 
-- Native card radius: 16–20dp according to the existing screen.
-- Native button radius: 12dp for secondary actions and 16dp for primary actions; preserve existing component variants.
+- Native card radius: 20dp; native sheet radius: 28dp (top corners only).
+- Native card radius: 20dp; native sheet radius: 28dp (top corners only).
+- Native button radius: 14dp for secondary actions and 16dp for primary actions.
 - Native touch target: at least 48dp. Web targets: at least 44 CSS pixels, with 48px for primary mobile actions where space permits.
 - Use a subtle theme-aware border and restrained shadows.
 - Never shift layout on hover or press.

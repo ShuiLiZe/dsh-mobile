@@ -21,6 +21,8 @@ For LAN, the app also offers a scan and manual `https://IP:port` entry. Discover
 
 The **Paired computers** list shows names, connection types, addresses, reachability and recent connections. Tap a row to connect; long-press or use **More** to rename, check, reorder or delete its local record. New records append to the list; **Move up / Move to top** changes presentation, not the startup choice. **Add computer** accepts a fresh pairing link; pairing the same installation in the same mode retains its custom name.
 
+Screens the app draws itself (the device list and its empty state, connection centre, LAN and remote setup, pairing, the connection wait, failure prompts and the scanner) follow the connected DSH theme: the synchronised palette supplies every colour, cards use 20dp corners with a 1dp theme border, and menus are a bottom sheet rather than a stock dialog list. With no saved computer the list shows the DSH mark, one sentence, **Scan QR code** and **Enter address** instead of an empty page. Settings that were dialog lists (startup behavior, automatic same-computer connection) open in the same sheet with a checkmark on the current choice.
+
 | Location | Setting or action |
 | --- | --- |
 | Device list → Settings → Startup behavior | **Open DSH directly** (default) selects the last-used eligible pairing, even when several computers are saved. **Show device list** asks you to choose at each launch. |
