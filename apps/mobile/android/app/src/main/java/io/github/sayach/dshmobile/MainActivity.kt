@@ -156,6 +156,8 @@ class MainActivity : Activity() {
     private var connectionFullWaitingView: FrameLayout? = null
     private var connectionFullCancelButton: TextView? = null
     private var connectionPageVisible = false
+    /** The ring on the native loader; it mirrors DSH's own boot progress while DSH loads behind it. */
+    private var connectionLoaderSpinner: DshRingSpinner? = null
 
     /** The address field of the LAN setup, so the empty state can jump straight to typing. */
     private var setupAddressField: EditText? = null
@@ -659,7 +661,7 @@ class MainActivity : Activity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(spacer(16))
-        addView(dshWaitingIndicator(), LinearLayout.LayoutParams(dp(24), dp(24)))
+        addView(dshWaitingIndicator().also { connectionLoaderSpinner = it }, LinearLayout.LayoutParams(dp(24), dp(24)))
         addView(spacer(16))
         addView(TextView(this@MainActivity).apply {
             text = caption
@@ -672,7 +674,7 @@ class MainActivity : Activity() {
     }
 
     /** DSH's thin ring loader; still when the system asks to reduce animation. */
-    private fun dshWaitingIndicator(): View = DshRingSpinner(
+    private fun dshWaitingIndicator(): DshRingSpinner = DshRingSpinner(
         this,
         // DSH's track is the label colour at 10% (12% on dark).
         (0x1A shl 24) or (themeColor(R.color.app_foreground) and 0x00FFFFFF),
@@ -792,6 +794,7 @@ class MainActivity : Activity() {
         connectionCancelButton = null
         connectionFullWaitingView = null
         connectionFullCancelButton = null
+        connectionLoaderSpinner = null
         connectionPageVisible = false
         applyStatusBarIconContrast(window, if (webView == null) themeColor(R.color.app_background)
             else preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background)))
@@ -3250,6 +3253,17 @@ class MainActivity : Activity() {
     }
 
     /** HTML completion alone does not release the initial connection's cancel button or deadline. */
+    /** Copy the arc of DSH's boot spinner (hidden behind the native loader) onto the native ring. */
+    private fun mirrorDshBootProgress(browser: WebView) {
+        val spinner = connectionLoaderSpinner ?: return
+        runCatching {
+            browser.evaluateJavascript(DSH_BOOT_ARC_PROBE) { result ->
+                if (connectionLoaderSpinner !== spinner || webView !== browser) return@evaluateJavascript
+                dshBootArcDegrees(result)?.let(spinner::setProgressSweep)
+            }
+        }
+    }
+
     private fun finishConnectionWhenPageReady(
         browser: WebView,
         origin: GatewayOrigin,
@@ -3272,6 +3286,7 @@ class MainActivity : Activity() {
                 }
             }
             else {
+                mirrorDshBootProgress(browser)
                 pageReadyCheck?.let(restoreUiHandler::removeCallbacks)
                 pageReadyCheck = Runnable { finishConnectionWhenPageReady(browser, origin, attempt, documentGeneration) }
                     .also { restoreUiHandler.postDelayed(it, PAGE_READY_POLL_MS) }
@@ -4139,6 +4154,8 @@ class MainActivity : Activity() {
     private companion object {
         const val CANCEL_PILL_BOTTOM_DP = 32
         const val BOOT_REVEAL_FALLBACK_MS = 15_000L
+        const val DSH_BOOT_ARC_PROBE =
+            "(() => { const s = document.querySelector('[data-dsh-boot-spinner]'); return s ? s.style.getPropertyValue('--dsh-boot-arc') : '' })()"
         const val PREFERENCES_NAME = "dsh_mobile"
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"

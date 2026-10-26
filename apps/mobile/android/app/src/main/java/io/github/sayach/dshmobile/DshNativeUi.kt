@@ -226,6 +226,17 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
     }
     private val bounds = android.graphics.RectF()
     private var spinning = false
+    private var sweep = START_SWEEP
+    private var targetSweep = START_SWEEP
+
+    /** Follows DSH's boot progress: the arc grows from 72 to 288 degrees as plugins activate. */
+    fun setProgressSweep(degrees: Float) {
+        targetSweep = degrees.coerceIn(START_SWEEP, END_SWEEP)
+        if (!spinning) {
+            sweep = targetSweep
+            invalidate()
+        }
+    }
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -240,7 +251,8 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
         // animator scale at 0 (developer options, battery savers), which froze the ring into a
         // plain circle. DSH's web loader keeps turning in that case, so this one does too.
         val angle = -90f + (android.os.SystemClock.uptimeMillis() % SPIN_MS) * 360f / SPIN_MS
-        canvas.drawArc(bounds, angle, ARC_SWEEP, false, arc)
+        sweep += (targetSweep - sweep) * 0.12f
+        canvas.drawArc(bounds, angle, sweep, false, arc)
         if (spinning) postInvalidateOnAnimation()
     }
 
@@ -263,9 +275,10 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
     }
 
     private companion object {
-        // DSH's web loader turns once per 0.8s; the arc is the long one DSH shows near completion.
+        // DSH's web loader: one turn per 0.8s, arc 72deg + progress x 216deg.
         const val SPIN_MS = 800L
-        const val ARC_SWEEP = 240f
+        const val START_SWEEP = 72f
+        const val END_SWEEP = 288f
     }
 }
 
