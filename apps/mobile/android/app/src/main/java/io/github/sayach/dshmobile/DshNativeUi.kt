@@ -220,7 +220,8 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
     private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = stroke
-        strokeCap = Paint.Cap.ROUND
+        // DSH draws the arc with a conic gradient: square ends, not rounded caps.
+        strokeCap = Paint.Cap.BUTT
         color = arcColor
     }
     private val bounds = android.graphics.RectF()
@@ -258,8 +259,9 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
     }
 
     private companion object {
-        const val SPIN_MS = 900L
-        const val ARC_SWEEP = 90f
+        // DSH's web loader turns once per 0.8s; the arc is the long one DSH shows near completion.
+        const val SPIN_MS = 800L
+        const val ARC_SWEEP = 240f
     }
 }
 

@@ -654,12 +654,11 @@ class MainActivity : Activity() {
         addView(TextView(this@MainActivity).apply {
             text = getString(R.string.dsh_loader_wordmark)
             gravity = Gravity.CENTER
-            applyDshType(16f, Typeface.NORMAL, themeColor(R.color.app_foreground), letterSpacingEm = 0.1f)
-            // DSH's web wordmark is medium weight, not bold.
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            // DSH's web wordmark: 16px, weight 600, 0.08em tracking.
+            applyDshType(16f, Typeface.BOLD, themeColor(R.color.app_foreground), letterSpacingEm = 0.08f)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        addView(spacer(20))
+        addView(spacer(16))
         addView(dshWaitingIndicator(), LinearLayout.LayoutParams(dp(24), dp(24)))
         addView(spacer(16))
         addView(TextView(this@MainActivity).apply {
@@ -675,7 +674,8 @@ class MainActivity : Activity() {
     /** DSH's thin ring loader; still when the system asks to reduce animation. */
     private fun dshWaitingIndicator(): View = DshRingSpinner(
         this,
-        themeColor(R.color.app_border),
+        // DSH's track is the label colour at 10% (12% on dark).
+        (0x1A shl 24) or (themeColor(R.color.app_foreground) and 0x00FFFFFF),
         themeColor(R.color.app_foreground),
     )
 
@@ -3419,7 +3419,12 @@ class MainActivity : Activity() {
             if (!ownsBrowser() || !connectionAttempts.isCurrent(attempt)
                 || secureWebViewClient?.currentDocumentGeneration != generation) return
             loadingDocumentGeneration = generation
-            revealConnectionPage(browser, attempt, generation)
+            // The native loader stays over DSH's own boot loader so the user sees one steady
+            // ring from tap to app. The page is only revealed early if DSH has not mounted after
+            // a long while, so a boot failure DSH reports is never hidden behind the native page.
+            restoreUiHandler.postDelayed({
+                revealConnectionPage(browser, attempt, generation)
+            }, BOOT_REVEAL_FALLBACK_MS)
             finishConnectionWhenPageReady(browser, origin, attempt, generation)
         }
         if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.NAVIGATION_LISTENER)) {
@@ -4133,6 +4138,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val CANCEL_PILL_BOTTOM_DP = 32
+        const val BOOT_REVEAL_FALLBACK_MS = 15_000L
         const val PREFERENCES_NAME = "dsh_mobile"
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"
