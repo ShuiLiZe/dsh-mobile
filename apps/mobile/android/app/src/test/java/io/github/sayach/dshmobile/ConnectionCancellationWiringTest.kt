@@ -11,9 +11,9 @@ class ConnectionCancellationWiringTest {
         val source = activitySource()
         val start = method(source, "startConnectionAttempt")
         assertFalse("Setup pages use the plain DSH background", source.contains("setup_background_image"))
-        assertTrue(start.contains("ProgressBar(this@MainActivity)"))
+        assertTrue("The waiting page shows a progress indicator while the attempt is live", start.contains("dshWaitingIndicator()"))
         assertTrue(Regex("secondaryButton\\(\\s*if \\(preserveBrowser == null\\) R\\.string\\.connection_cancel else R\\.string\\.connection_stop_reconnecting,\\s*48,").containsMatchIn(start))
-        assertTrue(start.contains("{ connectionAttempts.cancel(attempt) }"))
+        assertTrue(start.contains("{ _ -> connectionAttempts.cancel(attempt) }"))
         assertTrue(start.contains("attachConnectionWaitingView()"))
         assertTrue(start.contains("isClickable = true"))
         assertTrue(start.contains("isFocusableInTouchMode = true"))
@@ -181,7 +181,7 @@ class ConnectionCancellationWiringTest {
         assertTrue(reveal.contains("Gravity.END"))
         assertTrue(reveal.contains("ViewGroup.LayoutParams.WRAP_CONTENT"))
         assertTrue("The compact button retains initial-connection and reconnect labels", reveal.contains("if (stopReconnecting) R.string.connection_stop_reconnecting else R.string.connection_cancel"))
-        assertTrue("The compact button must retain the current attempt's explicit cancellation", Regex("secondaryButton\\([\\s\\S]*?48,\\s*\\) \\{ connectionAttempts.cancel\\(attempt\\) }").containsMatchIn(reveal))
+        assertTrue("The compact button must retain the current attempt's explicit cancellation", Regex("secondaryButton\\([\\s\\S]*?48,\\s*\\) \\{ _ -> connectionAttempts.cancel\\(attempt\\) }").containsMatchIn(reveal))
         assertTrue(reveal.indexOf("connectionPageVisible = true") < reveal.indexOf("attachConnectionWaitingView()"))
         for (operation in listOf("finishConnectionAttempt(", "confirmContentReady(", "connectionAttempts.finish(", "dismissConnectionProgress()", "pendingConnection =", "loadingConnectionAttempt =", "pageReadyCheck =", ".stopLoading()")) {
             assertFalse("Revealing committed content is not authentication or application completion: $operation", reveal.contains(operation))
@@ -276,7 +276,7 @@ class ConnectionCancellationWiringTest {
 
     @Test fun anExplicitRetryOwnsItsLoadingBudgetAndCanReleaseTheStoppedBrowser() {
         val failure = method(activitySource(), "showLoadFailure")
-        val retry = failure.substringAfter(".setPositiveButton(R.string.retry)").substringBefore(".setNegativeButton(R.string.edit_connection)")
+        val retry = failure.substringAfter(".confirm(R.string.retry)").substringBefore(".alternate(getString(R.string.edit_connection))")
         val resume = retry.indexOf("recoveryStoppedBrowser = null")
         assertTrue(resume >= 0)
         assertTrue(resume < retry.indexOf("canRecoverAutomatically()"))

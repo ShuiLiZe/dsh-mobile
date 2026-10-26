@@ -76,8 +76,8 @@ class InitialPageLoadRecoveryTest {
         assertTrue(recovery.indexOf("if (initialPageLoadPending()) return") < recovery.indexOf("loadingConnectionAttempt = null"))
         val failure = method(activity, "showLoadFailure")
         assertTrue(failure.indexOf("shouldAutomaticallyRecoverPage(failure, initialPageLoadPending())") < failure.indexOf("scheduleAutomaticRecovery()"))
-        assertTrue(failure.contains(".setPositiveButton(R.string.retry)"))
-        assertTrue(failure.substringAfter(".setPositiveButton(R.string.retry)").contains("recoverAutomatically()"))
+        assertTrue(failure.contains(".confirm(R.string.retry)"))
+        assertTrue(failure.substringAfter(".confirm(R.string.retry)").contains("recoverAutomatically()"))
         assertTrue(activity.contains("const val LAN_CONNECTION_BUDGET_MS = 30_000L"))
         assertTrue(activity.contains("const val REMOTE_CONNECTION_BUDGET_MS = 60_000L"))
     }
