@@ -16,3 +16,9 @@ class DshBootArcTest {
         assertNull(dshBootArcDegrees(null))
     }
 }
+
+class DshLongArcLoaderTest {
+    @Test fun dshBootSpinnerIsPinnedToTheSameLongArcAsTheNativeRing() {
+        org.junit.Assert.assertTrue(DSH_LONG_ARC_LOADER.contains("[data-dsh-boot-spinner]{--dsh-boot-arc:${DSH_LONG_ARC_DEGREES}deg !important}"))
+    }
+}

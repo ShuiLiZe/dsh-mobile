@@ -17,6 +17,7 @@ internal fun installBrowserCompatibilityShim(webView: WebView, origin: GatewayOr
     if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return false
     return runCatching {
         WebViewCompat.addDocumentStartJavaScript(webView, BROWSER_COMPATIBILITY_SHIM, browserCompatibilityOrigins(origin))
+        runCatching { WebViewCompat.addDocumentStartJavaScript(webView, DSH_LONG_ARC_LOADER, browserCompatibilityOrigins(origin)) }
         true
     }.getOrDefault(false)
 }
@@ -51,5 +52,19 @@ internal const val BROWSER_COMPATIBILITY_SHIM = """
       });
     }
   } catch (error) { /* A non-extensible Promise constructor cannot receive this optional fallback. */ }
+})();
+"""
+
+/** DSH's boot spinner keeps one long arc from start to finish instead of growing from 72 degrees. */
+internal const val DSH_LONG_ARC_DEGREES = 240
+
+internal const val DSH_LONG_ARC_LOADER = """
+(function () {
+  try {
+    var style = document.createElement('style');
+    style.setAttribute('data-dsh-mobile-long-arc', '');
+    style.textContent = '[data-dsh-boot-spinner]{--dsh-boot-arc:240deg !important}';
+    (document.head || document.documentElement).appendChild(style);
+  } catch (error) { /* DSH keeps its own progress arc. */ }
 })();
 """

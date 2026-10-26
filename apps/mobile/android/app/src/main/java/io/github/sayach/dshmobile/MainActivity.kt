@@ -661,7 +661,10 @@ class MainActivity : Activity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(spacer(16))
-        addView(dshWaitingIndicator().also { connectionLoaderSpinner = it }, LinearLayout.LayoutParams(dp(24), dp(24)))
+        addView(dshWaitingIndicator().also {
+            it.setProgressSweep(DSH_LONG_ARC_DEGREES.toFloat())
+            connectionLoaderSpinner = it
+        }, LinearLayout.LayoutParams(dp(24), dp(24)))
         addView(spacer(16))
         addView(TextView(this@MainActivity).apply {
             text = caption
@@ -3286,7 +3289,6 @@ class MainActivity : Activity() {
                 }
             }
             else {
-                mirrorDshBootProgress(browser)
                 pageReadyCheck?.let(restoreUiHandler::removeCallbacks)
                 pageReadyCheck = Runnable { finishConnectionWhenPageReady(browser, origin, attempt, documentGeneration) }
                     .also { restoreUiHandler.postDelayed(it, PAGE_READY_POLL_MS) }
