@@ -3434,12 +3434,9 @@ class MainActivity : Activity() {
             if (!ownsBrowser() || !connectionAttempts.isCurrent(attempt)
                 || secureWebViewClient?.currentDocumentGeneration != generation) return
             loadingDocumentGeneration = generation
-            // The native loader stays over DSH's own boot loader so the user sees one steady
-            // ring from tap to app. The page is only revealed early if DSH has not mounted after
-            // a long while, so a boot failure DSH reports is never hidden behind the native page.
-            restoreUiHandler.postDelayed({
-                revealConnectionPage(browser, attempt, generation)
-            }, BOOT_REVEAL_FALLBACK_MS)
+            // Hand over to DSH's own boot loader as soon as it paints: a page kept covered by the
+            // native loader is throttled by the WebView and boots far slower.
+            revealConnectionPage(browser, attempt, generation)
             finishConnectionWhenPageReady(browser, origin, attempt, generation)
         }
         if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.NAVIGATION_LISTENER)) {
@@ -4153,7 +4150,6 @@ class MainActivity : Activity() {
 
     private companion object {
         const val CANCEL_PILL_BOTTOM_DP = 32
-        const val BOOT_REVEAL_FALLBACK_MS = 15_000L
         const val DSH_BOOT_ARC_PROBE =
             "(() => { const s = document.querySelector('[data-dsh-boot-spinner]'); return s ? s.style.getPropertyValue('--dsh-boot-arc') : '' })()"
         const val PREFERENCES_NAME = "dsh_mobile"
