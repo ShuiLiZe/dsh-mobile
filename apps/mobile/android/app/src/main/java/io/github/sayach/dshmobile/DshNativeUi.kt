@@ -250,9 +250,14 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
         // Driven by the frame clock rather than ValueAnimator: many phones run with the system
         // animator scale at 0 (developer options, battery savers), which froze the ring into a
         // plain circle. DSH's web loader keeps turning in that case, so this one does too.
-        val angle = -90f + (android.os.SystemClock.uptimeMillis() % SPIN_MS) * 360f / SPIN_MS
-        sweep += (targetSweep - sweep) * 0.12f
-        canvas.drawArc(bounds, angle, sweep, false, arc)
+        val now = android.os.SystemClock.uptimeMillis()
+        val angle = -90f + (now % SPIN_MS) * 360f / SPIN_MS
+        // The arc breathes between short and long while it turns, the same motion as the
+        // style the app injects into DSH's own boot spinner, so it never reads as a plain circle.
+        val phase = (now % BREATH_MS).toFloat() / BREATH_MS
+        val wave = (1f - kotlin.math.cos(phase * 2f * Math.PI.toFloat())) / 2f
+        val length = MIN_BREATH + (MAX_BREATH - MIN_BREATH) * wave
+        canvas.drawArc(bounds, angle - length / 2f, length, false, arc)
         if (spinning) postInvalidateOnAnimation()
     }
 
@@ -279,6 +284,9 @@ internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) 
         const val SPIN_MS = 800L
         const val START_SWEEP = 72f
         const val END_SWEEP = 288f
+        const val BREATH_MS = 1_600L
+        const val MIN_BREATH = 30f
+        const val MAX_BREATH = 270f
     }
 }
 

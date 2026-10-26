@@ -55,7 +55,7 @@ internal const val BROWSER_COMPATIBILITY_SHIM = """
 })();
 """
 
-/** DSH's boot spinner keeps one long arc from start to finish instead of growing from 72 degrees. */
+/** DSH's boot spinner arc breathes 30-270 degrees while it turns, matching the native ring. */
 internal const val DSH_LONG_ARC_DEGREES = 240
 
 internal const val DSH_LONG_ARC_LOADER = """
@@ -63,7 +63,9 @@ internal const val DSH_LONG_ARC_LOADER = """
   try {
     var style = document.createElement('style');
     style.setAttribute('data-dsh-mobile-long-arc', '');
-    style.textContent = '[data-dsh-boot-spinner]{--dsh-boot-arc:240deg !important}';
+    style.textContent = '@property --dsh-boot-arc{syntax:"<angle>";inherits:true;initial-value:72deg}'
+      + '@keyframes dshm-boot-arc{0%,100%{--dsh-boot-arc:30deg;transform:rotate(0deg)}50%{--dsh-boot-arc:270deg;transform:rotate(-120deg)}}'
+      + '[data-dsh-boot-spinner]::after{animation:dshm-boot-arc 1.6s ease-in-out infinite}';
     (document.head || document.documentElement).appendChild(style);
   } catch (error) { /* DSH keeps its own progress arc. */ }
 })();
