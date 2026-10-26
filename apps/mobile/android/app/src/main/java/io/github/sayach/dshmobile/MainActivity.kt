@@ -28,7 +28,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
@@ -594,143 +593,101 @@ class MainActivity : Activity() {
         currentFocus?.let { focused ->
             getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(focused.windowToken, 0)
         }
+        val loaderBackground = dshLoaderBackground()
         val waiting = FrameLayout(this).apply {
-            setBackgroundColor(themeColor(R.color.app_background))
+            setBackgroundColor(loaderBackground)
             isClickable = true
             isFocusableInTouchMode = true
             accessibilityPaneTitle = message
             // Receive unconsumed Insets before the real page while still drawing above it.
             translationZ = dp(1).toFloat()
         }
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
-            setPadding(dp(32), dp(32), dp(32), dp(32))
-        }
-        val mark = dshWaitingMark()
-        val indicator = dshWaitingIndicator()
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            addView(mark, LinearLayout.LayoutParams(dp(64), dp(64)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
-            addView(spacer(24))
-            addView(TextView(this@MainActivity).apply {
-                text = getString(R.string.waiting_title)
-                gravity = Gravity.CENTER
-                applyDshType(DshNativeType.SECTION, Typeface.BOLD, themeColor(R.color.app_foreground), DshNativeType.LINE_TITLE)
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(spacer(8))
-            addView(TextView(this@MainActivity).apply {
-                text = message
-                gravity = Gravity.CENTER
-                applyDshType(DshNativeType.BODY, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_BODY)
-                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(spacer(24))
-            addView(indicator, LinearLayout.LayoutParams(dp(WAITING_TRACK_DP), dp(2)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
-            addView(spacer(24))
-            addView(TextView(this@MainActivity).apply {
-                text = getString(R.string.waiting_hint)
-                gravity = Gravity.CENTER
-                applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_CAPTION)
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(spacer(32))
-            val cancel = secondaryButton(
-                if (preserveBrowser == null) R.string.connection_cancel else R.string.connection_stop_reconnecting,
-                48,
-            ) { _ -> connectionAttempts.cancel(attempt) }
-            connectionCancelButton = cancel
-            addView(cancel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        scroll.addView(content, FrameLayout.LayoutParams(
-            min((resources.displayMetrics.widthPixels - dp(64)).coerceAtLeast(1), dp(400)),
+        // The same wordmark, ring and caption DSH's web shell shows while it boots, at the same
+        // place, so handing over to the web loader has no visible seam.
+        val content = dshLoaderColumn(message)
+        DshNativeMotion.fadeIn(content, this)
+        waiting.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.CENTER_HORIZONTAL,
+            Gravity.CENTER,
         ))
-        scroll.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val width = (right - left - scroll.paddingLeft - scroll.paddingRight).coerceIn(1, dp(400))
-            if (content.layoutParams.width != width) content.layoutParams = content.layoutParams.apply { this.width = width }
-        }
-        waiting.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val cancel = cancelPill(
+            if (preserveBrowser == null) R.string.connection_cancel else R.string.connection_stop_reconnecting,
+        ) { _ -> connectionAttempts.cancel(attempt) }
+        connectionCancelButton = cancel
+        waiting.addView(cancel, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+        ))
         waiting.setOnApplyWindowInsetsListener { _, insets ->
             val edges = resolveWebViewSafeArea(insets)
-            scroll.setPadding(dp(32) + edges.left, dp(32) + edges.top, dp(32) + edges.right, dp(32) + edges.bottom)
+            content.setPadding(dp(32) + edges.left, edges.top, dp(32) + edges.right, edges.bottom)
+            (cancel.layoutParams as FrameLayout.LayoutParams).let { layout ->
+                val bottom = dp(CANCEL_PILL_BOTTOM_DP) + edges.bottom
+                if (layout.bottomMargin != bottom) {
+                    layout.bottomMargin = bottom
+                    cancel.layoutParams = layout
+                }
+            }
             insets
         }
         connectionWaitingView = waiting
         connectionFullWaitingView = waiting
         connectionFullCancelButton = connectionCancelButton
-        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
-        DshNativeMotion.fadeIn(content, this)
+        applyStatusBarIconContrast(window, loaderBackground)
         attachConnectionWaitingView()
         return attempt
     }
 
-    /** The DSH mark in a hairline ring: the only ornament on a waiting page. */
-    private fun dshWaitingMark(): FrameLayout = FrameLayout(this).apply {
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(ImageView(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_dsh_mark)
-            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_foreground))
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, FrameLayout.LayoutParams(dp(32), dp(32), Gravity.CENTER))
-        background = DshNativeShapes.ring(
-            this@MainActivity,
-            Color.TRANSPARENT,
-            0,
-            themeColor(R.color.app_border),
-        )
-    }
+    /** The web shell's own background, so the native loader and DSH's loader share one canvas. */
+    private fun dshLoaderBackground(): Int =
+        preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background))
 
     /**
-     * A short two-pixel hairline with a travelling segment: quieter than a platform spinner,
-     * and a static track when the system asks to reduce animation.
+     * Wordmark, thin ring and one quiet caption: the loader DSH's web shell shows while it boots.
+     * Every native waiting surface uses this column so the hand-over is seamless.
      */
-    private fun dshWaitingIndicator(): View {
-        val segmentWidth = dp(WAITING_SEGMENT_DP)
-        val track = FrameLayout(this).apply {
+    private fun dshLoaderColumn(caption: CharSequence): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        addView(TextView(this@MainActivity).apply {
+            text = getString(R.string.dsh_loader_wordmark)
+            gravity = Gravity.CENTER
+            applyDshType(14f, Typeface.BOLD, themeColor(R.color.app_foreground), letterSpacingEm = 0.18f)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_border), 999)
-            clipChildren = true
-            clipToOutline = true
-            outlineProvider = ViewOutlineProvider.BACKGROUND
-        }
-        val segment = View(this).apply {
-            background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_foreground), 999)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            visibility = if (DshNativeMotion.animationsEnabled(this@MainActivity)) View.VISIBLE else View.INVISIBLE
-        }
-        track.addView(segment, FrameLayout.LayoutParams(segmentWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START))
-        var sweep: android.animation.ObjectAnimator? = null
-        track.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val width = right - left
-            if (!DshNativeMotion.animationsEnabled(this) || width <= 0 || sweep != null) return@addOnLayoutChangeListener
-            sweep = android.animation.ObjectAnimator.ofFloat(
-                segment,
-                View.TRANSLATION_X,
-                -segmentWidth.toFloat(),
-                width.toFloat(),
-            ).apply {
-                duration = DshNativeDimens.MOTION_MS * 6L
-                interpolator = DshNativeMotion.interpolator()
-                repeatCount = android.animation.ValueAnimator.INFINITE
-                start()
-            }
-        }
-        track.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(view: View) = Unit
-            override fun onViewDetachedFromWindow(view: View) {
-                sweep?.cancel()
-                sweep = null
-            }
-        })
-        return track
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(spacer(20))
+        addView(dshWaitingIndicator(), LinearLayout.LayoutParams(dp(24), dp(24)))
+        addView(spacer(16))
+        addView(TextView(this@MainActivity).apply {
+            text = caption
+            gravity = Gravity.CENTER
+            applyDshType(12f, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_CAPTION)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
+
+    /** DSH's thin ring loader; still when the system asks to reduce animation. */
+    private fun dshWaitingIndicator(): View = DshRingSpinner(
+        this,
+        themeColor(R.color.app_border),
+        themeColor(R.color.app_foreground),
+    )
+
+    /** The low-emphasis cancel control used over every loader: a hairline pill, never a slab. */
+    private fun cancelPill(textResource: Int, onClick: (TextView) -> Unit): TextView =
+        quietPill(
+            this,
+            getString(textResource),
+            themeColor(R.color.app_secondary),
+            themeColor(R.color.app_border),
+            themeColor(R.color.app_surface_tinted),
+        ).apply {
+            setOnClickListener { onClick(this) }
+        }
 
     /** Only presentation is detached when the real form/browser root changes. */
     private fun detachConnectionWaitingView() {
@@ -776,27 +733,24 @@ class MainActivity : Activity() {
     private fun showCompactConnectionWaiting(attempt: ConnectionAttemptController.Attempt, stopReconnecting: Boolean = false) {
         if (pendingConnection !== attempt || !connectionAttempts.isCurrent(attempt)) return
         detachConnectionWaitingView()
-        val cancel = secondaryButton(
+        val cancel = cancelPill(
             if (stopReconnecting) R.string.connection_stop_reconnecting else R.string.connection_cancel,
-            48,
         ) { _ -> connectionAttempts.cancel(attempt) }
+        // Same pill, same place as on the native loader, so it does not jump at the hand-over.
         val compact = FrameLayout(this).apply {
             isClickable = false
             isFocusable = false
             translationZ = dp(1).toFloat()
             addView(cancel, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.END,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
             ))
             setOnApplyWindowInsetsListener { _, insets ->
                 val edges = resolveWebViewSafeArea(insets)
                 val layout = cancel.layoutParams as FrameLayout.LayoutParams
-                if (layout.leftMargin != dp(16) + edges.left || layout.topMargin != dp(16) + edges.top
-                    || layout.rightMargin != dp(16) + edges.right || layout.bottomMargin != dp(16) + edges.bottom) {
-                    layout.leftMargin = dp(16) + edges.left
-                    layout.topMargin = dp(16) + edges.top
-                    layout.rightMargin = dp(16) + edges.right
-                    layout.bottomMargin = dp(16) + edges.bottom
+                val bottom = dp(CANCEL_PILL_BOTTOM_DP) + edges.bottom
+                if (layout.bottomMargin != bottom) {
+                    layout.bottomMargin = bottom
                     cancel.layoutParams = layout
                 }
                 insets
@@ -1733,24 +1687,20 @@ class MainActivity : Activity() {
         showingSetup = false
         setupBackAction = null
         destroyWebView()
-        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
+        val loaderBackground = dshLoaderBackground()
+        applyStatusBarIconContrast(window, loaderBackground)
         val root = FrameLayout(this).apply {
-            setBackgroundColor(themeColor(R.color.app_background))
+            setBackgroundColor(loaderBackground)
         }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(32), dp(32), dp(32), dp(32))
+        val content = dshLoaderColumn(getString(R.string.restoring_trust)).apply {
+            setPadding(dp(32), 0, dp(32), 0)
         }
-        content.addView(dshWaitingMark(), LinearLayout.LayoutParams(dp(64), dp(64)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        })
-        content.addView(spacer(24))
-        content.addView(textView(R.string.restoring_trust, 16f, Typeface.NORMAL, R.color.app_secondary).apply {
-            gravity = Gravity.CENTER
-        })
         DshNativeMotion.fadeIn(content, this)
-        root.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER,
+        ))
         setPageContent(root)
         applySafeAreaInsets(root)
     }
@@ -4180,8 +4130,7 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
-        const val WAITING_TRACK_DP = 120
-        const val WAITING_SEGMENT_DP = 40
+        const val CANCEL_PILL_BOTTOM_DP = 32
         const val PREFERENCES_NAME = "dsh_mobile"
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"

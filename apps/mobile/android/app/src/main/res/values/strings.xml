@@ -206,6 +206,7 @@
     <string name="devices_section_title">Computers</string>
     <string name="devices_settings_section_title">Preferences</string>
     <string name="connection_section_title">Access</string>
+    <string name="dsh_loader_wordmark" translatable="false">HARNESS</string>
     <string name="waiting_title">Connecting</string>
     <string name="waiting_hint">Keep DSH running on the computer. You can cancel at any time.</string>
     <string name="launch_settings_description">Choose what the launcher opens. The device list keeps every paired computer one tap away.</string>

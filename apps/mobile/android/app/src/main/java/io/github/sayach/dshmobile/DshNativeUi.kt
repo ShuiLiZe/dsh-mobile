@@ -203,3 +203,85 @@ internal fun ImageView.frameIcon(sizeDp: Int, context: Context) {
     scaleType = ImageView.ScaleType.FIT_CENTER
     layoutParams = ViewGroup.LayoutParams(DshNativeDimens.dp(context, sizeDp), DshNativeDimens.dp(context, sizeDp))
 }
+
+/**
+ * The thin ring loader DSH's own web shell shows while it boots: a hairline track with a
+ * quarter arc turning at a steady pace. The native waiting page uses the same mark, size and
+ * position so handing over to the web loader is seamless. When the system asks to reduce
+ * animation the arc stays still.
+ */
+internal class DshRingSpinner(context: Context, trackColor: Int, arcColor: Int) : View(context) {
+    private val stroke = DshNativeDimens.dp(context, 2).toFloat()
+    private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = stroke
+        color = trackColor
+    }
+    private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = stroke
+        strokeCap = Paint.Cap.ROUND
+        color = arcColor
+    }
+    private val bounds = android.graphics.RectF()
+    private var angle = -90f
+    private val spin: ValueAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
+        duration = SPIN_MS
+        repeatCount = ValueAnimator.INFINITE
+        interpolator = android.view.animation.LinearInterpolator()
+        addUpdateListener {
+            angle = -90f + it.animatedValue as Float
+            invalidate()
+        }
+    }
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        val inset = stroke / 2f
+        bounds.set(inset, inset, width - inset, height - inset)
+        canvas.drawOval(bounds, track)
+        canvas.drawArc(bounds, angle, ARC_SWEEP, false, arc)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (DshNativeMotion.animationsEnabled(context)) spin.start()
+    }
+
+    override fun onDetachedFromWindow() {
+        spin.cancel()
+        super.onDetachedFromWindow()
+    }
+
+    private companion object {
+        const val SPIN_MS = 900L
+        const val ARC_SWEEP = 90f
+    }
+}
+
+/**
+ * A quiet hairline pill for a low-emphasis action such as cancelling a connection: transparent,
+ * one border, secondary text. It never competes with the page it sits on.
+ */
+internal fun quietPill(context: Context, text: CharSequence, textColor: Int, borderColor: Int, pressColor: Int): TextView =
+    TextView(context).apply {
+        this.text = text
+        gravity = android.view.Gravity.CENTER
+        applyDshType(DshNativeType.LABEL, Typeface.NORMAL, textColor)
+        textSize = 14f
+        letterSpacing = 0.02f
+        minHeight = DshNativeDimens.dp(context, 40)
+        minimumHeight = DshNativeDimens.dp(context, 40)
+        setPadding(DshNativeDimens.dp(context, 22), 0, DshNativeDimens.dp(context, 22), 0)
+        background = RippleDrawable(
+            ColorStateList.valueOf(pressColor),
+            DshNativeShapes.surface(context, android.graphics.Color.TRANSPARENT, 999, borderColor),
+            DshNativeShapes.surface(context, android.graphics.Color.BLACK, 999),
+        )
+        isClickable = true
+        isFocusable = true
+    }
