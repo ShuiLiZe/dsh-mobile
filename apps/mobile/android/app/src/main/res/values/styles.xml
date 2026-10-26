@@ -13,6 +13,23 @@
         <item name="android:windowActionModeOverlay">true</item>
     </style>
 
+    <!-- Full-screen, edge-to-edge window for DshActionSheet: no floating dialog frame,
+         no platform dim or animation (the sheet draws its own scrim and motion). -->
+    <style name="DshActionSheet" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+    </style>
+
     <!-- Themed text field used by native forms: no platform underline, tinted rounded box
          is applied in code so it can follow the synchronized DSH palette. -->
     <style name="DshNativeField">

@@ -14,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
+import androidx.core.view.WindowCompat
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -31,12 +32,13 @@ import android.widget.TextView
  * over the page, a rounded surface with one hairline border, a quiet title, and rows
  * that carry a check mark plus an optional second line describing the choice.
  */
-internal class DshActionSheet(context: Context) : Dialog(context) {
+internal class DshActionSheet(context: Context) : Dialog(context, R.style.DshActionSheet) {
 
     internal class Row(
         val label: CharSequence,
         val description: CharSequence?,
         val selected: Boolean,
+        val destructive: Boolean,
         val onClick: () -> Unit,
     )
 
@@ -79,9 +81,10 @@ internal class DshActionSheet(context: Context) : Dialog(context) {
             label: CharSequence,
             description: CharSequence? = null,
             selected: Boolean = false,
+            destructive: Boolean = false,
             onClick: () -> Unit,
         ): Builder = apply {
-            sheet.rows.add(Row(label, description, selected, onClick))
+            sheet.rows.add(Row(label, description, selected, destructive, onClick))
         }
 
         /** Adds a primary confirmation action below the rows. */
@@ -161,11 +164,21 @@ internal class DshActionSheet(context: Context) : Dialog(context) {
         super.onCreate(savedInstanceState)
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         val window = window ?: return
+        // A full-screen, edge-to-edge window: the sheet draws its own scrim over the whole
+        // display, including behind the status and navigation bars, instead of the platform
+        // floating-dialog frame that clips it to a centred column.
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        window.setDimAmount(0f)
-        window.setGravity(Gravity.BOTTOM)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setGravity(Gravity.FILL)
         window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        matchOwnerSystemBarIcons(window)
         setCanceledOnTouchOutside(true)
 
         scrim = View(context).apply {
@@ -292,7 +305,7 @@ internal class DshActionSheet(context: Context) : Dialog(context) {
             labelView.applyDshType(
                 DshNativeType.BODY,
                 if (row.selected) Typeface.BOLD else Typeface.NORMAL,
-                foreground,
+                if (row.destructive) errorColor() else foreground,
             )
             column.addView(labelView)
             val note: CharSequence? = row.description
@@ -357,6 +370,27 @@ internal class DshActionSheet(context: Context) : Dialog(context) {
     private fun spacerView(heightDp: Int): View = View(context).apply {
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         layoutParams = LinearLayout.LayoutParams(0, pad(heightDp))
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Some OEM dialog frames re-apply their own width after the first layout.
+        window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    }
+
+    /** Status and navigation bar icons keep the contrast the page underneath already chose. */
+    private fun matchOwnerSystemBarIcons(window: Window) {
+        val owner = (ownerActivity ?: context.findActivity())?.window ?: return
+        val ownerController = WindowCompat.getInsetsController(owner, owner.decorView)
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.isAppearanceLightStatusBars = ownerController.isAppearanceLightStatusBars
+        controller.isAppearanceLightNavigationBars = ownerController.isAppearanceLightNavigationBars
+    }
+
+    private tailrec fun Context.findActivity(): android.app.Activity? = when (this) {
+        is android.app.Activity -> this
+        is android.content.ContextWrapper -> baseContext.findActivity()
+        else -> null
     }
 
     override fun show() {

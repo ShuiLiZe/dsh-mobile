@@ -28,6 +28,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
@@ -46,7 +47,6 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -628,13 +628,16 @@ class MainActivity : Activity() {
                 applyDshType(DshNativeType.BODY, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_BODY)
                 accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(spacer(12))
+            addView(spacer(24))
+            addView(indicator, LinearLayout.LayoutParams(dp(WAITING_TRACK_DP), dp(2)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
+            addView(spacer(24))
             addView(TextView(this@MainActivity).apply {
                 text = getString(R.string.waiting_hint)
                 gravity = Gravity.CENTER
                 applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_CAPTION)
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(indicator, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)))
             addView(spacer(32))
             val cancel = secondaryButton(
                 if (preserveBrowser == null) R.string.connection_cancel else R.string.connection_stop_reconnecting,
@@ -685,49 +688,45 @@ class MainActivity : Activity() {
     }
 
     /**
-     * A two-pixel track with a travelling segment: quieter than a platform spinner and
-     * completely static when the system asks to reduce animation.
+     * A short two-pixel hairline with a travelling segment: quieter than a platform spinner,
+     * and a static track when the system asks to reduce animation.
      */
     private fun dshWaitingIndicator(): View {
-        val spinner = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
-            isIndeterminate = true
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            minimumHeight = dp(2)
-            indeterminateTintList = ColorStateList.valueOf(themeColor(R.color.app_foreground))
-        }
+        val segmentWidth = dp(WAITING_SEGMENT_DP)
         val track = FrameLayout(this).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            val border = themeColor(R.color.app_border)
-            background = DshNativeShapes.surface(this@MainActivity, border, 999)
-            clipToOutline = false
+            background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_border), 999)
+            clipChildren = true
+            clipToOutline = true
+            outlineProvider = ViewOutlineProvider.BACKGROUND
         }
-        // The travelling segment is the reduced-motion fallback to the platform spinner above.
         val segment = View(this).apply {
             background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_foreground), 999)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = if (DshNativeMotion.animationsEnabled(this@MainActivity)) View.VISIBLE else View.INVISIBLE
         }
-        track.addView(segment, FrameLayout.LayoutParams(dp(96), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START))
-        track.addView(spinner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2), Gravity.CENTER_VERTICAL))
-        track.addOnLayoutChangeListener { view, _, _, right, _, _, _, _, _ ->
-            if (!DshNativeMotion.animationsEnabled(this) || right <= dp(96)) return@addOnLayoutChangeListener
-            if (segment.animation != null || segment.translationX > 0f) return@addOnLayoutChangeListener
-            val travel = (right - dp(96)).toFloat()
-            segment.animate().translationX(travel)
-                .setDuration(DshNativeDimens.MOTION_MS * 4)
-                .setInterpolator(DshNativeMotion.interpolator())
-                .withEndAction {
-                    segment.animate().translationX(0f)
-                        .setDuration(DshNativeDimens.MOTION_MS * 4)
-                        .setInterpolator(DshNativeMotion.interpolator())
-                        .start()
-                }
-                .start()
+        track.addView(segment, FrameLayout.LayoutParams(segmentWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START))
+        var sweep: android.animation.ObjectAnimator? = null
+        track.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+            val width = right - left
+            if (!DshNativeMotion.animationsEnabled(this) || width <= 0 || sweep != null) return@addOnLayoutChangeListener
+            sweep = android.animation.ObjectAnimator.ofFloat(
+                segment,
+                View.TRANSLATION_X,
+                -segmentWidth.toFloat(),
+                width.toFloat(),
+            ).apply {
+                duration = DshNativeDimens.MOTION_MS * 6L
+                interpolator = DshNativeMotion.interpolator()
+                repeatCount = android.animation.ValueAnimator.INFINITE
+                start()
+            }
         }
         track.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) = Unit
             override fun onViewDetachedFromWindow(view: View) {
-                segment.animate().cancel()
+                sweep?.cancel()
+                sweep = null
             }
         })
         return track
@@ -1038,8 +1037,8 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(14), dp(8), dp(14))
-            minimumHeight = dp(72)
+            setPadding(dp(16), dp(16), dp(4), dp(16))
+            minimumHeight = dp(80)
             background = DshNativeShapes.pressable(
                 this@MainActivity,
                 themeColor(R.color.app_surface),
@@ -1052,11 +1051,6 @@ class MainActivity : Activity() {
             contentDescription = getString(R.string.open_paired_device, device.displayName)
         }
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val tag = TextView(this).apply {
-            text = deviceModeTag(device)
-            applyDshType(DshNativeType.LABEL, Typeface.BOLD, themeColor(R.color.app_secondary))
-            letterSpacing = 0.06f
-        }
         val title = TextView(this).apply {
             text = device.displayName
             applyDshType(DshNativeType.SECTION, Typeface.BOLD, themeColor(R.color.app_foreground), DshNativeType.LINE_TITLE)
@@ -1074,32 +1068,29 @@ class MainActivity : Activity() {
             deviceStatusViews[device.key] = this
             setDeviceStatusText(this, device)
         }
-        details.addView(tag)
-        details.addView(spacer(4))
         details.addView(title)
         details.addView(spacer(4))
         details.addView(address)
         details.addView(spacer(6))
         details.addView(status)
+        // Leading platform tile: the LAN/remote glyph in a tinted circle, so the trailing edge
+        // keeps a single action instead of three competing marks.
+        row.addView(FrameLayout(this).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_surface_tinted), 999)
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(if (device.mode == AccessMode.REMOTE) R.drawable.ic_cloud else R.drawable.ic_desktop)
+                imageTintList = ColorStateList.valueOf(themeColor(R.color.app_foreground))
+                contentDescription = null
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(16) })
         row.addView(details, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         updateDeviceRowAccessibility(row, device, status.text)
         row.addView(toolbarIconButton(R.drawable.ic_more_vertical, R.string.device_actions).apply {
             setOnClickListener { showDeviceActions(device) }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        row.addView(ImageView(this).apply {
-            setImageResource(if (device.mode == AccessMode.REMOTE) R.drawable.ic_cloud else R.drawable.ic_desktop)
-            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_secondary))
-            contentDescription = null
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(4) })
-        row.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_chevron_right)
-            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_secondary))
-            contentDescription = null
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }, LinearLayout.LayoutParams(dp(16), dp(48)).apply { marginEnd = dp(4) })
         row.setOnClickListener { connectPairedDevice(device) }
         row.setOnLongClickListener {
             row.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
@@ -1113,12 +1104,6 @@ class MainActivity : Activity() {
         AccessMode.LAN -> getString(R.string.connection_mode_lan)
         AccessMode.REMOTE -> getString(R.string.connection_mode_remote)
     }
-
-    /** The LAN/remote label above the device name, uppercased like a quiet section tag. */
-    private fun deviceModeTag(device: PairedDeviceRecord): String = when (device.mode) {
-        AccessMode.LAN -> getString(R.string.connection_mode_lan)
-        AccessMode.REMOTE -> getString(R.string.connection_mode_remote)
-    }.uppercase(java.util.Locale.getDefault())
 
     private fun setDeviceStatusText(view: TextView, device: PairedDeviceRecord) {
         val current = device.key == activeDeviceKey && webView != null
@@ -1230,13 +1215,14 @@ class MainActivity : Activity() {
                 showDeviceList()
             })
         }
-        actions.add(getString(R.string.device_action_delete) to { confirmDeleteDevice(device) })
+        val deleteLabel = getString(R.string.device_action_delete)
+        actions.add(deleteLabel to { confirmDeleteDevice(device) })
         DshActionSheet.Builder(this)
             .title(device.displayName)
             .message(getString(R.string.paired_device_address, device.modeLabel(), device.origin.serialized))
             .apply {
                 actions.forEach { (label, run) ->
-                    row(label) { run() }
+                    row(label, destructive = label == deleteLabel) { run() }
                 }
             }
             .alternate(getString(R.string.cancel)) { }
@@ -4191,6 +4177,8 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val WAITING_TRACK_DP = 120
+        const val WAITING_SEGMENT_DP = 40
         const val PREFERENCES_NAME = "dsh_mobile"
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"
