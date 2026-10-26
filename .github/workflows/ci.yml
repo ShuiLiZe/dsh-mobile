@@ -51,6 +51,9 @@ jobs:
           echo "DSH_BOOT_SMOKE_BIN=$RUNNER_TEMP/dsh-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" >> "$GITHUB_ENV"
           echo "DSH_BOOT_SMOKE_MOBILE_TARBALL=$RUNNER_TEMP/plugin-package/dsh-mobile-$mobile_version.tgz" >> "$GITHUB_ENV"
       - run: npx playwright install --with-deps chromium --only-shell
+      - name: Verify same-origin Blob media without widening external CSP sources
+        if: matrix.dsh == '0.2.1-rc.2'
+        run: npm run smoke:blob-media
       - name: Verify live installation through the DSH plugin manager
         run: npm run smoke:plugin-installation
       - name: Verify registry installation with isolated pnpm
@@ -83,6 +86,12 @@ jobs:
           node scripts/negative-control.mjs "$RUNNER_TEMP/layout-ownership-negative.log" "Mobile layout ownership negative control detected"
       - run: npm run smoke:voice-session
       - run: npm run smoke:composer-keyboard
+      - name: Verify Gallery selection, menu order and stale-result cleanup
+        if: matrix.dsh == '0.2.1-rc.2'
+        run: npm run smoke:gallery
+      - name: Verify limited plain-text draft transfer through public DSH input APIs
+        if: matrix.dsh == '0.2.1-rc.2'
+        run: npm run smoke:draft-transfer
       - run: npm run smoke:composer-overflow
       - name: Verify the real stock composer with optional plugin controls
         if: matrix.dsh == '0.2.0-rc.2' || matrix.dsh == '0.2.1-alpha.2' || matrix.dsh == '0.2.1-alpha.3' || matrix.dsh == '0.2.1-rc.2'
@@ -156,6 +165,9 @@ jobs:
         run: npm run smoke:upstream-auth
       - run: npm run smoke:question-fixes
       - run: npm run smoke:dsh-boot
+      - name: Verify separate desktop and mobile directory flows
+        if: matrix.dsh == '0.2.0-rc.2' || matrix.dsh == '0.2.1-rc.2'
+        run: npm run smoke:directory-picker
       - name: Verify old-WebView API fallback and directory browsing
         if: matrix.dsh == '0.2.0-rc.2' || matrix.dsh == '0.2.1-rc.2'
         run: npm run smoke:dsh-boot -- --legacy-webview

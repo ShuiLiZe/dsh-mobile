@@ -1,7 +1,7 @@
 import type { ResolvedGatewayConfig } from './config.js'
 
 /**
- * Use the persisted installation identity for an unpinned, automatically identified entry.
+ * Attach the authenticated installation identity while retaining existing entry identity rules.
  * @param config - Validated gateway configuration containing the legacy identity.
  * @param installationId - Confirmed random identity read from this installation's state.
  * @param explicitIdentity - Whether the operator supplied the gateway identity.
@@ -12,6 +12,6 @@ export function withInstallationIdentity(
   installationId: string,
   explicitIdentity: boolean,
 ): ResolvedGatewayConfig {
-  if (config.pairingCaFile !== undefined || explicitIdentity) return config
-  return Object.freeze({ ...config, instanceId: installationId, legacyInstanceId: config.instanceId })
+  if (config.pairingCaFile !== undefined || explicitIdentity) return Object.freeze({ ...config, installationId })
+  return Object.freeze({ ...config, installationId, instanceId: installationId, legacyInstanceId: config.instanceId })
 }

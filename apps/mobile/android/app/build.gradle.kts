@@ -22,8 +22,8 @@ android {
         applicationId = "io.github.sayach.dshmobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = 81
-        versionName = "0.6.5"
+        versionCode = 84
+        versionName = "0.6.8"
     }
 
     signingConfigs {
@@ -38,6 +38,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installable beside the release app: a distinct applicationId makes
+            // Android treat this as a separate app with its own data and pairing.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = true
             if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")

@@ -92,11 +92,12 @@ import {
   type RemoteProviderController,
   type RemoteProviderStatus,
 } from './remote.js'
-import { parseAuthority, parseCidr, probeTcpReachable } from './network.js'
+import { isLoopbackAddress, parseAuthority, parseCidr, probeTcpReachable } from './network.js'
 import {
   availableLanNetworks,
   isNetworkSelectionError,
   materializeManagedSetup,
+  refreshManagedUpstreamOrigin,
   parseAdditionalTrustedNetworks,
   parseManagedSetup,
   saveManagedTrustedNetworks,
@@ -489,13 +490,29 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const dshVersion = installedDshVersion()
   const loaded = await loadSetup(config)
   const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
-  const template = loopbackTemplate(loaded, ctx.webServer.port)
-  const upstreamLoginUrl = upstreamAuthenticatedUrl(ctx, template.upstreamOrigin)
-  const instanceId = await stableInstanceId(loaded, template)
-  const stateDirectory = dirname(template.stateFile)
+  const baseTemplate = loopbackTemplate(loaded, ctx.webServer.port)
+  const upstreamLoginUrl = upstreamAuthenticatedUrl(ctx, baseTemplate.upstreamOrigin)
+  const adminLogin = upstreamLoginUrl === undefined ? undefined : new URL(upstreamLoginUrl)
+  const supportsRemoteAdminAuthentication = adminLogin !== undefined
+    && adminLogin.origin === baseTemplate.upstreamOrigin.origin && adminLogin.pathname === '/'
+    && adminLogin.username === '' && adminLogin.password === '' && adminLogin.hash === ''
+    && (adminLogin.searchParams.get('token')?.length ?? 0) > 0
+  const instanceId = await stableInstanceId(loaded, baseTemplate)
+  const stateDirectory = dirname(baseTemplate.stateFile)
   const logFile = await installMobileFileLogger(ctx, stateDirectory)
   const logger = ctx.logger('dsh-mobile')
   logger.info('logging initialized file=%s', logFile)
+  if (loaded.kind === 'managed' && typeof ctx.webServer.port === 'number') {
+    // Keep the compatibility snapshot in step with the port the gateway actually
+    // follows; the value itself never selects the upstream.
+    try {
+      if (await refreshManagedUpstreamOrigin(loaded.setupFile, loaded.setup, ctx.webServer.port)) {
+        logger.info('dsh-mobile: refreshed the managed setup upstream snapshot to the active DSH port')
+      }
+    } catch (error) {
+      logger.warn('dsh-mobile: could not refresh the managed setup upstream snapshot: %s', error instanceof Error ? error.message : String(error))
+    }
+  }
   // Completed root turns fan out to every live mobile gateway, whose phones
   // render the notification text locally. One subscription serves all paths.
   const taskEventHub = new TaskEventHub()
@@ -525,6 +542,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   // FRP registration and unpinned public pairing share the persisted installation
   // identity; CA-backed entries keep their certificate fingerprint.
   const frpIdentity = await loadOrCreateInstallationId(join(stateDirectory, 'installation-id'))
+  // All entries share this authenticated grouping hint independently of their
+  // existing CA/operator/credential instance identities.
+  const template = Object.freeze({ ...baseTemplate, installationId: frpIdentity })
   // Public entries serve no pairing CA, so their new pairings can use this
   // installation's random identity while legacy credentials retain their ID.
   const remoteInstanceId = loaded.kind === 'managed' ? frpIdentity : loaded.config.instanceId ?? frpIdentity
@@ -588,6 +608,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       clientModulePreferences,
       entry => { logger.warn('auth failure %s', JSON.stringify(entry)) },
       entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
+      entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
+      entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
     )
     await candidate.start()
     lanGateway = candidate
@@ -672,6 +694,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         clientModulePreferences,
         entry => { logger.warn('auth failure %s', JSON.stringify(entry)) },
         entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
+        entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
+        entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
       )
       await candidate.start()
       return candidate
@@ -699,6 +723,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       clientModulePreferences,
       entry => { logger.warn('auth failure %s', JSON.stringify(entry)) },
       entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
+      entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
+      entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
     )
     try { await candidate.start() } catch (error) {
       await candidate.close()
@@ -713,6 +739,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       upstreamLoginUrl, webSocketPaths, blockedUpgradePaths, undefined, clientModulePreferences,
       entry => { logger.warn('auth failure %s', JSON.stringify(entry)) },
       entry => { logger.warn('http failure %s', JSON.stringify(entry)) },
+      entry => { logger.info('upstream auth %s', JSON.stringify(entry)) },
+      entry => { logger.warn('slow api %s', JSON.stringify(entry)) },
     )
     try { await candidate.start() } catch (error) {
       await candidate.close()
@@ -914,7 +942,10 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     handler: async (request, response) => {
       try {
         const target = parseRequestTarget(request.url)
-        assertLocalAdminTrust(request, request.method === 'POST', () => authenticateDesktopAdmin(request))
+        assertLocalAdminTrust(request, request.method === 'POST', () => (
+          (isLoopbackAddress(request.socket.remoteAddress ?? '') || supportsRemoteAdminAuthentication)
+          && authenticateDesktopAdmin(request)
+        ), baseTemplate.adminAllowedCidrs)
         if (adminClosing) throw new HttpError(503, 'unavailable')
         if (target.search !== '') throw new HttpError(400, 'bad_request')
         const lanControl = target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/control`
@@ -940,8 +971,11 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
             }
             if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
             const body = await readJsonObject(request, template.maxBodyBytes)
-            if (Object.keys(body).length !== 1 || Object.keys(body).some(key => key !== 'reset' && key !== 'excludedClientModules')) throw new HttpError(400, 'bad_request')
-            const view = body.reset === true
+            if (Object.keys(body).length !== 1 || Object.keys(body).some(key => key !== 'reset' && key !== 'excludedClientModules' && key !== 'measure')
+              || ('measure' in body && body.measure !== true)) throw new HttpError(400, 'bad_request')
+            const view = body.measure === true
+              ? await gateway.measureClientModules(undefined, operation.signal)
+              : body.reset === true
               ? await gateway.resetClientModules(undefined, operation.signal)
               : await gateway.configureClientModules(body.excludedClientModules, undefined, operation.signal)
             sendJson(response, 200, view, false)

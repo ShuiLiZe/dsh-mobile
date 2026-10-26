@@ -254,6 +254,9 @@ async function runCase({ width, height = 900, locale, bridgeMode }) {
     }
     const geometry = await page.evaluate(() => ({ viewport: innerWidth, body: document.body.scrollWidth, root: document.documentElement.scrollWidth,
       language: document.documentElement.lang, fontRowLanguage: document.querySelector('[data-mobile-font-setting]')?.getAttribute('lang') }))
+    const expectedLanguage = locale.startsWith('zh') ? 'zh' : 'en'
+    assert.equal(geometry.language.toLowerCase().split(/[-_]/u)[0], expectedLanguage, 'Stored Host language displaced the browser-derived settings matrix')
+    assert.equal(geometry.fontRowLanguage, expectedLanguage, 'Mobile settings did not follow the active DSH language')
     assert(geometry.body <= geometry.viewport + 1 && geometry.root <= geometry.viewport + 1, `Settings overflow ${JSON.stringify(geometry)}`)
     assert.equal(settingsWrites.length, 0, `Local settings wrote Host preferences: ${settingsWrites.join(', ')}`)
     assert.deepEqual(errors, [], 'Settings generated unhandled page errors')
@@ -263,13 +266,98 @@ async function runCase({ width, height = 900, locale, bridgeMode }) {
     await row.waitFor({ state: 'hidden' })
     assert.equal(await page.evaluate(() => window.__settingsRetainedDocument), 'retain settings navigation', 'Closing settings replaced the DSH document')
     await page.locator('.dshm-main').waitFor({ state: 'visible' })
-    cases.push({ width, height, locale, bridgeMode, language: geometry.fontRowLanguage, typographySupport })
+    cases.push({ width, height, locale, bridgeMode, expectedLanguage, language: geometry.fontRowLanguage, typographySupport })
   } finally { await context.close() }
+}
+
+async function runLanguageCase() {
+  const context = await browser.newContext({ locale: 'zh-HK', extraHTTPHeaders: { 'Accept-Language': 'zh-HK,en;q=0.8' } })
+  const fresh = await browser.newContext({ locale: 'zh-HK' })
+  const blocked = await browser.newContext({ locale: 'zh-HK' })
+  try {
+    const page = await context.newPage()
+    const pairUrl = await openPairing(desktop, undefined, dsh.logs)
+    await pairMobilePage(page, pairUrl, dsh.logs)
+    await dismissOnboarding(page)
+    const origin = new URL(page.url()).origin
+    const selectLanguage = async (label, language) => {
+      if (!await page.locator('[data-mobile-font-setting]').isVisible()) await openSettings(page)
+      await page.getByRole('button', { name: /^(English|中文)$/u }).click()
+      await page.getByRole('menuitem', { name: label, exact: true }).click()
+      await page.waitForFunction(language => document.documentElement.lang === language, language)
+      const cookie = (await context.cookies(`${origin}/mobile-access/login`)).find(value => value.name === 'dsh_ma_ui_locale')
+      assert(cookie, 'DSH language was not remembered in the browser')
+      assert.equal(cookie.value, language === 'zh-CN' ? 'zh' : language)
+      assert.equal(cookie.path, '/mobile-access')
+      assert.equal(cookie.domain, new URL(origin).hostname, 'Preference must be host-only')
+      assert.equal(cookie.secure, new URL(origin).protocol === 'https:')
+      assert.equal(cookie.httpOnly, false)
+      assert.equal(cookie.sameSite, 'Lax')
+      assert(cookie.expires > Date.now() / 1000 + 3600 * 24 * 300, 'Preference must outlive the short session')
+    }
+    await selectLanguage('English', 'en')
+    const sessions = ['dsh_ma_session', '__Host-dsh_ma_session', 'dsh_ma_csrf', '__Host-dsh_ma_csrf']
+    const retained = (await context.cookies()).filter(cookie => !sessions.includes(cookie.name))
+    await context.clearCookies({ name: /^(?:__Host-)?dsh_ma_(?:session|csrf)$/u })
+    assert(retained.some(cookie => cookie.name === 'dsh_ma_ui_locale'))
+    assert((await context.cookies()).some(cookie => cookie.name === 'dsh_ma_ui_locale'), 'Session expiry erased UI preference')
+    const login = await context.newPage()
+    // Hold the real renewal request so the server-rendered initial language can be observed.
+    let failRenew
+    const held = new Promise(resolve => { failRenew = resolve })
+    await login.route('**/mobile-access/auth/renew', async route => { await held; await route.abort('failed') })
+    await login.goto(`${origin}/mobile-access/login`, { waitUntil: 'domcontentloaded' })
+    assert.equal(await login.locator('h1').textContent(), 'Reconnect this device')
+    assert.equal(await login.locator('#login-progress').textContent(), 'Restoring the secure Session…')
+    failRenew()
+    await login.getByText('The computer is unavailable. Check the connection and try again.', { exact: true }).waitFor()
+    // A rejected renewal exposes the genuine pairing link, whose destination shares the preference.
+    await login.unroute('**/mobile-access/auth/renew')
+    await login.route('**/mobile-access/auth/renew', route => route.fulfill({ status: 401, body: '{}' }))
+    await login.reload()
+    await login.locator('#login-failed:not([hidden])').waitFor()
+    await openPairing(desktop, undefined, dsh.logs)
+    await login.getByRole('link', { name: 'Open pairing', exact: true }).click()
+    assert.equal(await login.locator('h1').textContent(), 'Pair this device')
+    const renewed = await context.request.post(`${origin}/mobile-access/auth/renew`, { data: {}, headers: { origin } })
+    assert(renewed.ok(), 'Owned fixture could not renew the retained device session')
+    await page.locator('[data-dsh-mobile-settings-header] button[class*="_close"]').click()
+    // The original authenticated document can still update its display preference without a reload.
+    await selectLanguage('中文', 'zh-CN')
+    const chinese = await context.request.get(`${origin}/mobile-access/login`)
+    assert((await chinese.text()).includes('重新连接此设备'))
+    await selectLanguage('English', 'en')
+    const freshPage = await fresh.newPage()
+    await freshPage.route('**/mobile-access/auth/renew', route => route.abort('failed'))
+    await freshPage.goto(`${origin}/mobile-access/login`)
+    assert.equal(await freshPage.locator('h1').textContent(), '重新连接此设备', 'Fresh context must retain browser negotiation')
+    await blocked.addInitScript(() => {
+      const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')
+      Object.defineProperty(Document.prototype, 'cookie', { ...descriptor,
+        set(value) { if (!value.startsWith('dsh_ma_ui_locale=')) descriptor.set.call(this, value) },
+      })
+    })
+    const blockedPage = await blocked.newPage()
+    await pairMobilePage(blockedPage, await openPairing(desktop, undefined, dsh.logs), dsh.logs)
+    await dismissOnboarding(blockedPage)
+    await blockedPage.locator('.dshm-main').waitFor({ state: 'visible' })
+    await blockedPage.waitForFunction(() => document.documentElement.lang === 'en')
+    assert(!(await blocked.cookies()).some(cookie => cookie.name === 'dsh_ma_ui_locale'))
+    await blockedPage.route('**/mobile-access/auth/renew', route => route.abort('failed'))
+    await blockedPage.goto(`${origin}/mobile-access/login`)
+    assert.equal(await blockedPage.locator('h1').textContent(), '重新连接此设备', 'Blocked persistence must retain browser fallback')
+    cases.push({ language: 'DSH EN/中文 selection, session expiry, reconnect initial/error text, pairing destination, fresh/blocked contexts' })
+  } finally {
+    await context.close()
+    await fresh.close()
+    await blocked.close()
+  }
 }
 
 let desktop
 try {
-  const tarball = process.env.DSH_SETTINGS_SMOKE_TARBALL === undefined ? await packBundle(mobileRoot, root) : resolve(process.env.DSH_SETTINGS_SMOKE_TARBALL)
+  const suppliedTarball = process.env.DSH_SETTINGS_SMOKE_TARBALL ?? process.env.DSH_BOOT_SMOKE_MOBILE_TARBALL
+  const tarball = suppliedTarball === undefined ? await packBundle(mobileRoot, root) : resolve(suppliedTarball)
   tarballSha256 = createHash('sha256').update(await readFile(tarball)).digest('hex')
   const home = await createMobileProfile(root, { tarball, dshBin, packageStoreDirectory: join(root, 'package-store') })
   dsh = launchDsh(root, home, dshBin)
@@ -281,6 +369,8 @@ try {
   }
   await runCase({ width: 375, height: 812, locale: 'en-US', bridgeMode: 'browser' })
   await runCase({ width: 844, height: 393, locale: 'zh-CN', bridgeMode: 'scale-app' })
+  // Explicit language selection persists on the fixture Host, unlike browser-derived preferences above.
+  await runLanguageCase()
   console.log(JSON.stringify({ passed: cases.length, tarballSha256, cases, nativeScaleBridge: 'simulated; actual Android viewport reflow is device-tested separately',
     typography: 'real mounted React/DSH settings, local storage migration, role writes, reset, touch targets and no Host writes' }))
 } catch (error) {

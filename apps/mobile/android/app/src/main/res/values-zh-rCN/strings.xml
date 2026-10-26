@@ -8,19 +8,19 @@
     <string name="lan_access_title">局域网访问</string>
     <string name="lan_access_description">同一 Wi-Fi 或手机热点下自动发现，连接更快、延迟更低。</string>
     <string name="remote_access_title">远程访问</string>
-    <string name="remote_access_description">离开本地网络后连接。电脑端可选 cpolar 或 Tailscale，App 会自动识别。</string>
+    <string name="remote_access_description">在外网连接电脑。先在电脑端 DSH 开启远程访问，再扫码或粘贴配对链接。</string>
     <string name="paired_device_ready">已配对，点击即可连接</string>
     <string name="reconfigure_connection">重新配置</string>
     <string name="remote_setup_title">远程访问</string>
-    <string name="remote_setup_description">先在电脑端 DSH 选择 cpolar 或 Tailscale 并开启远程访问，再扫描配对二维码。</string>
-    <string name="remote_step_one">1. 在电脑端选择远程方式并按引导连接</string>
-    <string name="remote_step_two">2. 扫描远程配对二维码。App 自动识别通道，仍需经过 DSH 设备配对。</string>
+    <string name="remote_setup_description">先在电脑端 DSH 开启远程访问，再扫描配对二维码或粘贴配对链接。</string>
+    <string name="remote_step_one">1. 在电脑端 DSH 开启远程访问</string>
+    <string name="remote_step_two">2. 扫描远程配对二维码或粘贴配对链接</string>
     <string name="scan_remote_qr">扫描远程配对二维码</string>
     <string name="remote_link_label">远程配对链接</string>
     <string name="remote_link_hint">粘贴电脑端生成的 HTTPS 配对链接</string>
     <string name="connect_remote">使用配对链接连接</string>
     <string name="invalid_remote_link">远程链接无效\n这不是 DSH 生成的完整远程配对链接。请在电脑端重新生成并完整粘贴。</string>
-    <string name="tailscale_vpn_warning">正在通过 Tailscale 连接。中国大陆网络可能需要 VPN；若连接缓慢或失败，可在电脑端改用 cpolar。</string>
+    <string name="tailscale_vpn_warning">正在通过 Tailscale 连接。中国大陆网络可能需要 VPN；若连接缓慢或失败，可在电脑端 DSH 改用其他远程方式。</string>
     <string name="back_to_connections">返回连接方式</string>
     <string name="setup_title">连接 DeepSeek Harness</string>
     <string name="setup_description">先在当前 Wi-Fi 中找到 DSH，再输入电脑端显示的一次性配对密钥。</string>
@@ -28,7 +28,7 @@
     <string name="discovery_description">扫描当前局域网，选择要连接的电脑。</string>
     <string name="scan_prompt">请确保手机和电脑连接同一 Wi-Fi 或热点。</string>
     <string name="pairing_title">配对这台手机</string>
-    <string name="pairing_description">输入电脑 DSH 左下角“移动端”卡片显示的一次性密钥。</string>
+    <string name="pairing_description">输入电脑端 DSH“移动访问”中显示的一次性配对密钥。</string>
     <string name="selected_harness">已选 DSH</string>
     <string name="back_to_scan">返回设备列表</string>
     <string name="gateway_label">网关地址</string>
@@ -50,7 +50,7 @@
     <string name="pairing_in_progress">正在配对这台手机…</string>
     <string name="pairing_failed">配对失败\n二维码可能已过期、已使用，或电脑暂时不可达。请确认网络正常后重新生成二维码并立即重试。</string>
     <string name="pairing_tls_failed">无法验证电脑身份\n电脑地址不可达，或证书与二维码不匹配。请确认连接的是同一台电脑，再重新生成二维码。</string>
-    <string name="pairing_tailscale_unreachable">Tailscale 连接受阻\n当前 VPN、代理或 DNS 模式无法访问这个 .ts.net 地址。请切换 VPN 节点或代理模式；仍失败时返回电脑端改用 cpolar。</string>
+    <string name="pairing_tailscale_unreachable">Tailscale 连接受阻\n当前 VPN、代理或 DNS 模式无法访问这个 .ts.net 地址。请切换 VPN 节点或代理模式；仍失败时可在电脑端 DSH 改用其他远程方式。</string>
     <string name="connect">连接</string>
     <string name="scan_action">扫码配对</string>
     <string name="scan_hint">将电脑屏幕上的二维码对准取景框。</string>
@@ -197,4 +197,14 @@
     <string name="webview_update_action">查看更新选项</string>
     <string name="webview_continue">继续使用</string>
     <string name="device_storage_unavailable">安全配对存储暂时不可用。请解锁设备后重新打开 App 或重试，本次操作未能完成。</string>
+    <string name="same_host_title">同电脑自动连接</string>
+    <string name="same_host_limits">默认手动。只在已独立配对且认证安装身份一致的入口间切换。自动模式可免确认迁移受支持的纯文本；附件、引用、录音、待完成操作或不支持的状态仍需确认。目标冲突或迁移失败时保留原页面。仅迁移有限纯文本状态，不会重放消息。</string>
+    <string name="same_host_manual">手动</string>
+    <string name="same_host_enable">自动切换并提醒</string>
+    <string name="same_host_switch_title">切换连接？</string>
+    <string name="same_host_switch_warning">更换地址会重载 DSH，未发送文字、附件和页面状态可能丢失。取消可保留页面，请先保存或复制内容。</string>
+    <string name="same_host_switch_confirm">切换并重载</string>
+    <string name="same_host_detect">自动检测并提示</string>
+    <string name="same_host_switched">正在自动切换连接…</string>
+    <string name="same_host_migration_retained">迁移未完成，已保留原页面。</string>
 </resources>

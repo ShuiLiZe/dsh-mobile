@@ -508,6 +508,8 @@ describe('native mobile presentation', () => {
     const current = { ...origin, disposed: false, composerConnected: true }
     expect(isComposerMediaOriginCurrent(origin, current)).toBe(true)
     expect(isComposerMediaOriginCurrent(origin, { ...current, sessionId: 'session-b' })).toBe(false)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, href: 'https://dsh.test/other' })).toBe(false)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, sessionRoot: {} })).toBe(false)
     expect(isComposerMediaOriginCurrent(origin, { ...current, composer: {} })).toBe(false)
     expect(isComposerMediaOriginCurrent(origin, { ...current, generation: 3 })).toBe(false)
     expect(isComposerMediaOriginCurrent(origin, { ...current, disposed: true })).toBe(false)
@@ -531,7 +533,7 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).not.toContain('html:lang(zh)')
   })
 
-  it('places only the camera action in the native Add section and leaves file selection to DSH', () => {
+  it('places camera and dedicated-page Gallery in the native Add section using the shared chooser', () => {
     const source = installNativeMobileSurface.toString()
     expect(source).toContain('pickBrowserFiles')
     expect(source).toContain('signal: mediaPickerAbortController.signal')
@@ -543,8 +545,13 @@ describe('native mobile presentation', () => {
     expect(source).toContain('cameraButton.addEventListener("pointerdown", quietMediaPointer)')
     expect(source).toContain('active.isContentEditable')
     expect(source).toContain('label("Scatta foto", "Take photo", "拍照")')
-    expect(source).toContain('cameraButton.setAttribute("role", "option")')
-    expect(source).toContain('nativeItem.className')
+    expect(source).toContain('button.setAttribute("role", "option")')
+    expect(source).toContain('nativeItem?.className')
+    expect(source).toContain('label("Galleria", "Gallery", "相册")')
+    expect(source).toContain('multiple: true')
+    expect(source).toContain('galleryButton.addEventListener("click", chooseGallery)')
+    expect(source).toContain('galleryButton.removeEventListener("click", chooseGallery)')
+    expect(source).toContain('galleryBusy')
     expect(source).toContain('sectionTitle.nextElementSibling')
     expect(source).not.toContain('fileButton')
     expect(source).not.toContain('chooseImage')

@@ -8,8 +8,10 @@ import {
 import { createRestrictedFrpServerTemplate } from './frp-template.js'
 import { createFrpAttachFrpcToml, createFrpAttachTemplate } from './frp-attach.js'
 import { parseFrpSettings, type FrpSettings } from './frp-config.js'
+import { FRP_FORM_ERRORS, validateFrpForm, type FrpFormIssue, type FrpFormValues } from './frp-form-validation.js'
 import { installNativeMobileSurface, NATIVE_MOBILE_STYLES, resolveNativeMobileLanguage } from './native-mobile.js'
 import { installVoiceSession } from './voice-session.js'
+import { installDraftTransfer } from './draft-transfer.js'
 import { installMobileFontPreference, MobileFontSizeRow } from './mobile-font.js'
 import { MobileDisplayScaleRow } from './mobile-display-scale.js'
 import { MobileNativeSettingsActionController, type MobileNativeSettingsAction } from './mobile-native-settings-action.js'
@@ -21,6 +23,12 @@ import { invokeBoundNativeCapability } from './native-capability.js'
 import { pickBrowserFiles } from './browser-file-picker.js'
 import { createMobileAssetLoadReporter, ownsMobileCustomization, readMobileAssetText, type MobileAssetLoadFailure } from './mobile-custom-assets.js'
 import { EXTENSION_LIMITS, LEGACY_CUSTOM_ASSET_LIMIT } from './extension-limits.js'
+import { installMobileConnectionRecovery, type MobileConnectionState } from './client-recovery.js'
+import { installMobileUiLocalePersistence } from './mobile-ui-locale.js'
+import { dismissMobileDirectoryPicker, hasUpstreamBrowsePicker, installMobileDirectoryPicker } from './mobile-directory-picker.js'
+
+export { shouldNudgeReconnect, shouldRenewSession } from './client-recovery.js'
+export type { MobileConnectionState } from './client-recovery.js'
 
 export { DIAGNOSTIC_REASON_MESSAGES, LOCALIZED_DIAGNOSTIC_COPY, MOBILE_CONTROL_MESSAGES } from './client-messages.js'
 export type { MobileControlLocale } from './client-messages.js'
@@ -44,7 +52,7 @@ export function parseMobileRemoteProvider(value: unknown): MobileRemoteProvider 
 
 interface ClientContext {
   effect(effect: () => void | (() => void), label?: string): void
-  get(name: 'connection'): MobileConnectionHandle
+  get(name: 'connection'): MobileConnectionHandle | undefined
   get(name: string): unknown
   slots: {
     inject(key: string, callback: () => (() => void)): () => void
@@ -54,6 +62,12 @@ interface ClientContext {
 
 interface MobileConnectionHandle {
   isLoopback: boolean
+  /** Present on a live client connection; absent in the headless test harness. */
+  readonly state?: {
+    getSnapshot: () => MobileConnectionState
+    subscribe: (listener: () => void) => () => void
+  }
+  reconnect?: () => void
 }
 
 interface MobileExtensionContext {
@@ -121,6 +135,7 @@ export function installMobileNativeBack(view: Window, page: Document, blocked: (
     const top = layers.at(-1)
     if (top === undefined) return
     claim()
+    if (dismissMobileDirectoryPicker(top)) return
     const modelEntry = [...modelPopups].find(([popup]) => popup.contains(top))
     if (modelEntry !== undefined) {
       const [modelPopup, trigger] = modelEntry
@@ -199,7 +214,7 @@ declare global {
     __DSH_MOBILE_FRONTEND__?: 'dedicated'
     __DSH_MOBILE_NATIVE__?: {
       capabilities(): Promise<readonly string[]> | readonly string[]
-      invoke(action: string, input?: unknown): Promise<unknown>
+      invoke(action: string, input?: unknown, options?: { readonly signal?: AbortSignal }): Promise<unknown>
     }
     __DSH_MOBILE_KEYBOARD_STATE__?: { readonly imeVisible: boolean; readonly noHardwareKeyboard: boolean } | null
   }
@@ -752,6 +767,10 @@ const REMOTE_ERROR_MESSAGE_KEYS: Readonly<Record<string, string>> = {
   frp_discovery_invalid: 'frpDiscoveryInvalid',
   frp_stopped: 'frpStopped',
   frp_exited: 'frpExited',
+  frp_server_address_invalid: 'frpServerAddressInvalid',
+  frp_server_port_invalid: 'frpServerPortInvalid',
+  frp_token_invalid: 'frpTokenInvalid',
+  frp_public_origin_invalid: 'frpPublicOriginInvalid',
   frp_attach_mode_requires_vhost_port: 'frpAttachModeRequiresVhostPort',
   frp_attach_cert_unknown: 'frpAttachCertUnknownError',
   frp_entry_tls_invalid: 'frpEntryTlsInvalid',
@@ -1158,6 +1177,31 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   const frpPublicPortHint = element('p', 'dsh-mobile-control__frp-hint'); frpPublicPortHint.textContent = t('frpPublicPortHint')
   frpPublicPortLabel.append(frpPublicPort, frpPublicPortHint)
   frpServerLabel.append(frpServer); frpPortLabel.append(frpPort); frpTokenLabel.append(frpToken); frpOriginLabel.append(frpOrigin)
+  const frpInputs: Record<keyof FrpFormValues, HTMLInputElement | HTMLSelectElement> = {
+    serverAddress: frpServer, serverPort: frpPort, token: frpToken, publicOrigin: frpOrigin,
+    mode: frpMode, entryTls: frpEntryTls, vhostHttpPort: frpVhostPort, publicPort: frpPublicPort,
+  }
+  const frpInputLabels: Record<keyof FrpFormValues, HTMLLabelElement> = {
+    serverAddress: frpServerLabel, serverPort: frpPortLabel, token: frpTokenLabel, publicOrigin: frpOriginLabel,
+    mode: frpModeLabel, entryTls: frpEntryTlsLabel, vhostHttpPort: frpVhostLabel, publicPort: frpPublicPortLabel,
+  }
+  const frpLabelKeys: Record<keyof FrpFormValues, string> = {
+    serverAddress: 'frpServerAddress', serverPort: 'frpServerPort', token: 'frpToken', publicOrigin: 'frpPublicOrigin',
+    mode: 'frpMode', entryTls: 'frpEntryTls', vhostHttpPort: 'frpVhostHttpPort', publicPort: 'frpPublicPort',
+  }
+  const frpErrors = new Map<keyof FrpFormValues, HTMLParagraphElement>()
+  for (const [name, input] of Object.entries(frpInputs)) {
+    input.id = `dsh-mobile-frp-${name}`
+    input.setAttribute('aria-label', t(frpLabelKeys[name as keyof FrpFormValues]))
+    const error = element('p', 'dsh-mobile-control__origin-feedback is-error')
+    error.id = `${input.id}-error`; error.hidden = true
+    input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), error.id].filter(Boolean).join(' '))
+    frpInputLabels[name as keyof FrpFormValues].append(error)
+    frpErrors.set(name as keyof FrpFormValues, error)
+  }
+  const frpOriginHint = element('p', 'dsh-mobile-control__frp-hint'); frpOriginHint.id = 'dsh-mobile-frp-origin-hint'; frpOriginHint.textContent = t('frpPublicOriginHint')
+  frpOriginLabel.append(frpOriginHint)
+  frpOrigin.setAttribute('aria-describedby', `${frpOriginHint.id} ${frpOrigin.getAttribute('aria-describedby') ?? ''}`)
   frpFields.append(frpServerLabel, frpPortLabel, frpTokenLabel, frpOriginLabel, frpModeLabel, frpEntryTlsLabel, frpVhostLabel, frpPublicPortLabel)
   frpStep1.append(frpStep1Title, frpStep1Text, frpFields)
   const frpStep2 = element('section', 'dsh-mobile-control__frp-step')
@@ -1201,8 +1245,11 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   const frpStep4Text = element('p'); frpStep4Text.textContent = t('frpStep4Text')
   const frpAppRequirement = element('p', 'dsh-mobile-control__frp-requirement'); frpAppRequirement.textContent = t('frpAppRequirement')
   const frpConfigurationStatus = element('p', 'dsh-mobile-control__component-status'); frpConfigurationStatus.textContent = t('frpConfigurationMissing')
+  const frpFeedback = element('p', 'dsh-mobile-control__origin-feedback is-error'); frpFeedback.setAttribute('role', 'status'); frpFeedback.setAttribute('aria-live', 'polite'); frpFeedback.hidden = true
+  const frpActionHint = element('p', 'dsh-mobile-control__frp-hint'); frpActionHint.id = 'dsh-mobile-frp-action-hint'; frpActionHint.hidden = true
   const frpConfigure = element('button', 'dsh-mobile-control__primary dsh-mobile-control__frp-action'); frpConfigure.type = 'button'; frpConfigure.textContent = t('frpSaveConnect')
-  frpStep4.append(frpStep4Title, frpStep4Text, frpAppRequirement, frpConfigurationStatus, frpConfigure)
+  frpConfigure.setAttribute('aria-describedby', frpActionHint.id)
+  frpStep4.append(frpStep4Title, frpStep4Text, frpAppRequirement, frpConfigurationStatus, frpFeedback, frpActionHint, frpConfigure)
   const frpDetails = element('details', 'dsh-mobile-control__details')
   const frpDetailsSummary = element('summary'); frpDetailsSummary.textContent = t('frpComponentDetails')
   const frpDetailsBody = element('div', 'dsh-mobile-control__details-body')
@@ -2029,6 +2076,8 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       : t('installFrpc')
     frpInstall.disabled = remoteProviderBusy
     frpConfigure.disabled = remoteProviderBusy || !frpInstalled
+    frpActionHint.hidden = !frpConfigure.disabled
+    frpActionHint.textContent = t(remoteProviderBusy ? 'frpActionBusy' : !frpSupported ? 'frpUnsupported' : 'frpInstallBeforeConnect')
     vpsDeploy.disabled = remoteProviderBusy || !validVpsDeploymentForm()
     vpsCopyUninstall.disabled = vpsDeploy.disabled
     vpsUninstall.disabled = vpsDeploy.disabled
@@ -2411,8 +2460,6 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       .then(renderRemote, error => { remoteFailureText = t('purgeFailed', { error: String(error) }); remoteStatus.textContent = remoteFailureText })
       .finally(() => { remoteProviderBusy = false; cpolarPurge.disabled = false; loadRemote() })
   })
-  const validFrpServer = (value: string): boolean => value === value.trim() && value.length > 0 && value.length <= 253
-    && !/[\s\u0000-\u001f\u007f/\\@?#]/u.test(value)
   const frpForm = (): {
     readonly serverAddress: string
     readonly serverPort: number
@@ -2435,8 +2482,8 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       entryTls: frpEntryTls.value === 'self-signed' ? 'self-signed' as const : 'public-ip-cert' as const,
       // A blank vhost port in attach mode must stay blank: the host refuses to
       // guess 7080 rather than silently probing the wrong port.
-      ...(Number.isSafeInteger(vhostHttpPort) && vhostHttpPort >= 1 ? { vhostHttpPort } : {}),
-      ...(Number.isSafeInteger(publicPort) && publicPort >= 1 ? { publicPort } : {}),
+      ...(frpEntryTls.value === 'self-signed' || frpVhostPort.value.trim() === '' ? {} : { vhostHttpPort }),
+      ...(frpEntryTls.value === 'self-signed' ? { publicPort } : {}),
     }
   }
   /** Attach mode never installs frps; every other combination keeps the managed path. */
@@ -2455,29 +2502,50 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
     ...(form.publicPort === undefined ? {} : { publicPort: form.publicPort }),
   })
   const validFrpForm = (form: ReturnType<typeof frpForm>): boolean => {
-    if (!validFrpServer(form.serverAddress)) return false
-    try {
-      createFrpServerTemplateForClipboard(form.serverPort, form.token, form.publicOrigin)
-      return true
-    } catch { return false }
+    return validateFrpForm(form).length === 0
+  }
+  let frpValidationShown = false
+  let frpValidationAllowsSavedToken = false
+  const renderFrpIssues = (issues: readonly FrpFormIssue[], focus = false): void => {
+    for (const [name, input] of Object.entries(frpInputs)) {
+      const issue = issues.find(item => item.field === name)
+      const feedback = frpErrors.get(name as keyof FrpFormValues)!
+      if (issue === undefined) input.removeAttribute('aria-invalid')
+      else input.setAttribute('aria-invalid', 'true')
+      feedback.hidden = issue === undefined
+      feedback.textContent = issue === undefined ? '' : t(issue.messageKey)
+    }
+    frpFeedback.hidden = issues.length === 0
+    frpFeedback.textContent = issues.map(issue => t(issue.messageKey)).join(' ')
+    if (issues.length !== 0 && focus) {
+      frpConnectionGroup.open = true
+      frpInputs[issues[0]!.field].focus()
+    }
+  }
+  const checkFrpForm = (form: FrpFormValues, allowSavedToken = false): boolean => {
+    const issues = validateFrpForm(form, allowSavedToken)
+    frpValidationShown = true
+    frpValidationAllowsSavedToken = allowSavedToken
+    renderFrpIssues(issues, true)
+    return issues.length === 0
+  }
+  for (const [name, input] of Object.entries(frpInputs)) {
+    input.addEventListener(name === 'mode' || name === 'entryTls' ? 'change' : 'input', () => {
+      if (frpValidationShown) renderFrpIssues(validateFrpForm(frpForm(), frpValidationAllowsSavedToken))
+    })
   }
   frpCopyTemplate.addEventListener('click', () => {
     const form = frpForm()
-    if (!validFrpForm(form)) {
-      remoteStatus.textContent = t('frpInputInvalid')
-      return
-    }
+    if (!checkFrpForm(form)) return
     void navigator.clipboard.writeText(createFrpServerTemplateForClipboard(form.serverPort, form.token, form.publicOrigin))
       .then(() => { remoteStatus.textContent = t('templateCopied') }, () => { remoteStatus.textContent = t('templateCopyFailed') })
   })
   const frpAttachErrorText = (code: string): string => t(REMOTE_ERROR_MESSAGE_KEYS[code] ?? 'frpInputInvalid')
   const showFrpAttachError = (code: string): void => {
     const message = frpAttachErrorText(code)
-    if (code === 'frp_attach_mode_requires_vhost_port') {
-      frpVhostPort.setAttribute('aria-invalid', 'true')
-      frpVhostHint.textContent = message
-      frpVhostPort.focus()
-    }
+    const issue = FRP_FORM_ERRORS[code]
+    if (issue !== undefined) { frpValidationShown = true; renderFrpIssues([issue], true) }
+    else { frpFeedback.textContent = message; frpFeedback.hidden = false }
     remoteStatus.textContent = message
   }
   const frpClipboardProxyName = (): string | undefined => {
@@ -2489,11 +2557,7 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
   }
   frpCopyAttachPlan.addEventListener('click', () => {
     const form = frpForm()
-    if (!validFrpServer(form.serverAddress) || !Number.isSafeInteger(form.serverPort)
-      || form.serverPort < 1 || form.serverPort > 65_535 || form.publicOrigin === '') {
-      remoteStatus.textContent = t('frpInputInvalid')
-      return
-    }
+    if (!checkFrpForm(form, frpConfigured)) return
     if (form.token !== '') {
       // Everything needed is local, so the token stays in the browser.
       const attachForm = attachClipboardForm(form)
@@ -2522,18 +2586,14 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
         const text = typeof data.frpAttachTemplate === 'string' ? data.frpAttachTemplate : ''
         if (text === '') throw new Error('frp_settings_invalid')
         return navigator.clipboard.writeText(text).then(() => { remoteStatus.textContent = t('frpAttachPlanCopied') })
-      }, error => { remoteStatus.textContent = frpAttachErrorText(String(error)); return undefined })
+      }, error => { showFrpAttachError(error instanceof Error ? error.message : String(error)); return undefined })
       .catch(error => { remoteStatus.textContent = t('frpAttachPlanFailed', { error: String(error) }) })
       .finally(() => { remoteProviderBusy = false; frpCopyAttachPlan.disabled = configuredFrpProxyName === undefined })
   })
   /** Copy a token-bearing frpc.toml only from the token the user just typed. */
   frpCopyAttachToken.addEventListener('click', () => {
     const form = frpForm()
-    if (!validFrpServer(form.serverAddress) || !Number.isSafeInteger(form.serverPort)
-      || form.serverPort < 1 || form.serverPort > 65_535 || form.publicOrigin === '') {
-      remoteStatus.textContent = t('frpInputInvalid')
-      return
-    }
+    if (!checkFrpForm(form, frpConfigured)) return
     if (form.token !== '') {
       // The typed token is already in this browser, so the file is built locally.
       const attachForm = attachClipboardForm(form)
@@ -2852,17 +2912,13 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       // Attach mode is validated by the same parser the host uses, so the panel
       // reports the exact code (for example a missing vhostHTTPPort) instead of a
       // generic "invalid input".
-      const code = form.mode === 'attach'
-        ? frpAttachFormErrorCode(attachClipboardForm(form))
-        : (validFrpForm(form) ? undefined : 'frp_settings_invalid')
-      if (code !== undefined) {
-        if (form.mode === 'attach') showFrpAttachError(code)
-        else remoteStatus.textContent = t('frpInputInvalid')
-        return
-      }
+      if (!checkFrpForm(form)) return
     }
+    renderFrpIssues([])
     remoteProviderBusy = true
     frpConfigure.disabled = true
+    frpActionHint.hidden = false
+    frpActionHint.textContent = t('frpActionBusy')
     frpConfigure.setAttribute('aria-busy', 'true')
     frpConfigure.textContent = t('saving')
     const configure = unchanged
@@ -2872,7 +2928,11 @@ function installControl(): { remove: () => void; toggle: () => void; isOpen: () 
       frpToken.value = ''
       remoteStatus.textContent = t('frpSavingConnecting')
       return controlRequestJson('/api/mobile-access/remote/control', { method: 'POST', body: JSON.stringify({ running: true }) })
-    }).then(renderRemote, error => { remoteFailureText = t('configureFailed', { error: String(error) }); remoteStatus.textContent = remoteFailureText })
+    }).then(renderRemote, error => {
+      const code = error instanceof Error ? error.message : String(error)
+      if (FRP_FORM_ERRORS[code] !== undefined) showFrpAttachError(code)
+      else { remoteFailureText = t('configureFailed', { error: String(error) }); remoteStatus.textContent = remoteFailureText }
+    })
       .finally(() => {
         remoteProviderBusy = false
         frpConfigure.setAttribute('aria-busy', 'false')
@@ -4398,6 +4458,8 @@ export const CONTROL_STYLES = `
 .dsh-mobile-control__switcher{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin:0 0 14px;padding:4px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#f3f5f8)}.dsh-mobile-control__switcher[hidden]{display:none}.dsh-mobile-control__tab{min-height:36px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary,#606873);font:600 13px/1 system-ui;cursor:pointer}.dsh-mobile-control__tab.is-active{background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);box-shadow:0 1px 3px rgb(15 23 42 / 10%)}.dsh-mobile-control__view[hidden]{display:none}.dsh-mobile-control__intro{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#606873);font-size:12px;line-height:1.55}.dsh-mobile-control__http-frame-warning{box-sizing:border-box;margin:-4px 0 12px;padding:8px 10px;border:1px solid #d6a83f;border-radius:9px;background:var(--dsw-alias-bg-layer-1,#fff7df);color:var(--dsw-alias-label-primary,#694b00);font-size:11px;line-height:1.5;overflow-wrap:anywhere}.dsh-mobile-control__http-frame-warning[hidden]{display:none}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions button[hidden]{display:none}
 .dsh-mobile-control__provider-section{position:relative;margin:0 0 14px}.dsh-mobile-control__section-title{margin:0 0 8px;color:var(--dsw-alias-label-primary,#16181d);font:650 13px/1.4 system-ui}.dsh-mobile-control__provider-section>.dsh-mobile-control__section-title{padding-right:42px}.dsh-mobile-control__provider-choices{display:grid;grid-template-columns:1fr;gap:8px}.dsh-mobile-control__provider{display:flex;min-width:0;flex-direction:column;gap:6px;min-height:94px;padding:10px 11px;border:1px solid var(--dsw-alias-border-l2,#dbe1e8);border-radius:13px;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);text-align:left;cursor:pointer;touch-action:manipulation;transition:border-color 160ms ease,background-color 160ms ease,box-shadow 160ms ease}.dsh-mobile-control__provider:hover{border-color:#6f96db;background:var(--dsw-alias-interactive-bg-hover-solid,var(--dsw-alias-bg-layer-1,#f8fbff))}.dsh-mobile-control__provider.is-selected{border-color:var(--dsw-alias-label-primary-bluish,#2563eb);background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-bg-layer-1,#f5f8ff));box-shadow:0 0 0 1px var(--dsw-alias-label-primary-bluish,#2563eb) inset}.dsh-mobile-control__provider:disabled{cursor:wait;opacity:.62}.dsh-mobile-control__provider-top{display:flex;min-width:0;align-items:flex-start;justify-content:space-between;gap:5px}.dsh-mobile-control__provider-top strong{min-width:0;font-size:12px;line-height:1.3}.dsh-mobile-control__provider-badge{flex:none;padding:2px 5px;border-radius:999px;background:var(--dsw-alias-state-business-tertiary,#e8f0ff);color:var(--dsw-alias-label-primary,#1d4ed8);font:650 11px/1.25 system-ui}.dsh-mobile-control__provider-badge.is-cpolar{background:var(--dsw-alias-state-success-tertiary,#eaf8f2);color:var(--dsw-alias-label-primary,#087454)}.dsh-mobile-control__provider-description{color:var(--dsw-alias-label-secondary,#606873);font-size:12px;line-height:1.45}.dsh-mobile-control__provider-info{position:absolute;z-index:5;top:-13px;right:-8px}.dsh-mobile-control__provider-info-button{display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-secondary,#475569);cursor:pointer;touch-action:manipulation}.dsh-mobile-control__provider-info-button:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f5f9);color:var(--dsw-alias-label-primary-bluish,#2563eb)}.dsh-mobile-control__provider-info-glyph{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:18px;height:18px;border:1.5px solid currentColor;border-radius:50%;font:700 12px/1 system-ui}.dsh-mobile-control__provider-info-popover{position:absolute;z-index:6;top:38px;right:4px;box-sizing:border-box;width:min(292px,calc(100vw - 72px));padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#dbe1e8);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 10px 28px rgb(15 23 42 / 16%)}.dsh-mobile-control__provider-info-popover[hidden]{display:none}.dsh-mobile-control__provider-info-popover strong,.dsh-mobile-control__provider-info-popover span{display:block}.dsh-mobile-control__provider-info-popover strong{margin-bottom:3px;font-size:12px}.dsh-mobile-control__provider-info-popover span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}
 .dsh-mobile-control__self-hosted{margin:8px 0 0;border:1px solid var(--dsw-alias-border-l2,#dbe1e8);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#f8fafc)}.dsh-mobile-control__self-hosted-summary{display:flex;box-sizing:border-box;min-height:48px;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;cursor:pointer;list-style-position:inside}.dsh-mobile-control__self-hosted-summary>span:first-child{display:flex;min-width:0;flex-direction:column;gap:1px}.dsh-mobile-control__self-hosted-summary strong{font-size:11px}.dsh-mobile-control__self-hosted-summary span span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.35}.dsh-mobile-control__provider-badge.is-frp{background:var(--dsw-alias-bg-layer-1,#eef0f3);color:var(--dsw-alias-label-secondary,#475569)}.dsh-mobile-control__self-hosted-body{padding:0 8px 8px}.dsh-mobile-control__provider.is-frp{width:100%;min-height:64px;background:var(--dsw-alias-bg-layer-2,#fff)}
+.dsh-mobile-control__frp-setup input[aria-invalid=true],.dsh-mobile-control__frp-setup select[aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary,#bc3030)}
+.dsh-mobile-control__frp-setup .dsh-mobile-control__field>.dsh-mobile-control__origin-feedback{margin:0}
 /* The cloudflared setup section deliberately reuses this card, so
    .dsh-mobile-control__cloudflared-setup is a DOM hook for targeting rather than a
    style rule of its own. */
@@ -4434,10 +4496,19 @@ export const CONTROL_STYLES = `
 
 /** Mount the desktop control or mobile feature enhancements. */
 export function apply(ctx: ClientContext): void {
+  ctx.effect(() => installMobileUiLocalePersistence(document, window), 'dsh-mobile: browser UI locale persistence')
+
   ctx.effect(() => {
     if (window.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return
-    return trustAuthenticatedGatewayConnection(ctx.get('connection'))
+    const connection = ctx.get('connection')
+    if (connection !== undefined) return trustAuthenticatedGatewayConnection(connection)
   }, 'dsh-mobile: authenticated gateway client trust')
+
+  ctx.effect(() => {
+    const gatewayPage = document.querySelector('meta[name="dsh-mobile-gateway"][content="authenticated"]') !== null
+    if (!ownsMobileCustomization(gatewayPage, window.__DSH_MOBILE_FRONTEND__)) return
+    return installMobileConnectionRecovery(() => ctx.get('connection'), window, document)
+  }, 'dsh-mobile: connection recovery')
 
   ctx.effect(() => {
     const desktopAdmin = isDesktopAdminSurface(location.hostname, location.search, window.__DSH_MOBILE_FRONTEND__, location.protocol)
@@ -4449,6 +4520,8 @@ export function apply(ctx: ClientContext): void {
     document.head.append(style)
     const removeCustom = !desktopAdmin || gatewayCustomization ? installCustomAssets() : () => undefined
     const removeVoiceSession = installVoiceSession(!desktopAdmin)
+    const removeDraftTransfer = !desktopAdmin && document.querySelector('meta[name="dsh-mobile-gateway"][content="authenticated"]') !== null
+      ? installDraftTransfer(ctx, window, document) : () => undefined
     const removeModuleSettings = ctx.slots.inject('settings.general.item', () => ctx.slots.register({
       name: 'settings.general.item', id: 'dsh-mobile-client-modules', order: 120,
     }, () => createElement(ClientModuleSettingsRow, { scope: desktopAdmin ? 'computer' : 'device', locale: selectedMobileControlLocale() })))
@@ -4477,7 +4550,26 @@ export function apply(ctx: ClientContext): void {
         getLayout: () => ctx.get('layout'),
         getSidebarRight: () => ctx.get('sidebarRight'),
       }))
-      return () => { disposeClientModuleDialogs(); removeModuleSettings(); removeSettingsAction(); removeCustom(); removeSurface(); removeVoiceSession(); localFont.dispose(); style.remove() }
+      // The dedicated page owns its directory flow only when DSH's own picker
+      // cannot serve a remote browser: the desktop composition keeps DSH's
+      // adaptive picker (a native OS chooser there), which no remote browser
+      // can reach. When DSH resolved the browse interaction, its own web
+      // implementation already fills these slots, and shadowing it would take
+      // away the upstream folder creation.
+      const removeDirectoryPicker = window.__DSH_MOBILE_FRONTEND__ === 'dedicated'
+        && !hasUpstreamBrowsePicker(window)
+        ? installMobileDirectoryPicker(ctx, document) : () => Promise.resolve()
+      return async () => {
+        // Start the picker removal synchronously so no new flow can open, but run
+        // the existing teardown in the tick it always used. Awaiting the picker
+        // first would defer composer and queued native-call cancellation to a later
+        // microtask, letting an already-disposed owner reach the device
+        // (smoke:voice-session asserts a cancelled call must not).
+        const removal = removeDirectoryPicker()
+        try {
+          disposeClientModuleDialogs(); removeModuleSettings(); removeSettingsAction(); removeCustom(); removeSurface(); removeVoiceSession(); removeDraftTransfer(); localFont.dispose(); style.remove()
+        } finally { await removal }
+      }
     }
     const removeControl = installDshLanguageBoundSurface(() => {
       const control = installControl()
@@ -4507,7 +4599,7 @@ export function apply(ctx: ClientContext): void {
       }, createElement('rect', { x: 4, y: 1, width: 8, height: 14, rx: 2 }), createElement('path', { d: 'M7 12h2' })), wide ? createElement('span', { className: 'dsh-mobile-control__trigger-label' }, t('mobileAccess')) : undefined)))
       return () => { disposeSlot(); control.remove() }
     })
-    return () => { disposeClientModuleDialogs(); removeModuleSettings(); removeControl(); removeCustom(); removeVoiceSession(); style.remove() }
+    return () => { disposeClientModuleDialogs(); removeModuleSettings(); removeControl(); removeCustom(); removeVoiceSession(); removeDraftTransfer(); style.remove() }
   }, 'dsh-mobile: stock mobile adaptation and local control')
 }
 

@@ -8,19 +8,19 @@
     <string name="lan_access_title">Rete locale</string>
     <string name="lan_access_description">Connessione rapida sulla stessa rete Wi-Fi o sull\'hotspot del telefono, con rilevamento automatico.</string>
     <string name="remote_access_title">Accesso remoto</string>
-    <string name="remote_access_description">Collegati fuori dalla rete locale. Scegli cpolar o Tailscale sul computer; l\'app rileva automaticamente il metodo.</string>
+    <string name="remote_access_description">Collegati da una rete esterna con il codice QR o il link di abbinamento generato da DSH sul computer.</string>
     <string name="paired_device_ready">Abbinato — tocca per connetterti</string>
     <string name="reconfigure_connection">Configura di nuovo</string>
     <string name="remote_setup_title">Accesso remoto</string>
-    <string name="remote_setup_description">Scegli cpolar o Tailscale in DSH sul computer, abilita Accesso remoto e scansiona il relativo codice QR.</string>
-    <string name="remote_step_one">1. Scegli un metodo remoto sul computer e completa la configurazione</string>
-    <string name="remote_step_two">2. Scansiona il codice QR remoto. L\'app rileva il trasporto e resta attivo l\'abbinamento dei dispositivi DSH.</string>
+    <string name="remote_setup_description">Abilita Accesso remoto in DSH sul computer, poi scansiona il codice QR o incolla il link di abbinamento.</string>
+    <string name="remote_step_one">1. Abilita Accesso remoto in DSH sul computer</string>
+    <string name="remote_step_two">2. Scansiona il codice QR remoto o incolla il link di abbinamento</string>
     <string name="scan_remote_qr">Scansiona il QR remoto</string>
     <string name="remote_link_label">Link di abbinamento remoto</string>
     <string name="remote_link_hint">Incolla il link HTTPS generato sul computer</string>
     <string name="connect_remote">Connetti con il link</string>
     <string name="invalid_remote_link">Link remoto non valido\nNon è un link di abbinamento remoto completo generato da DSH. Generane uno nuovo sul computer e incollalo per intero.</string>
-    <string name="tailscale_vpn_warning">Connessione tramite Tailscale. Nella Cina continentale questo percorso può richiedere una VPN; se è lento o non disponibile, passa a cpolar sul computer.</string>
+    <string name="tailscale_vpn_warning">Connessione tramite Tailscale. Nella Cina continentale questo percorso può richiedere una VPN; se è lento o non disponibile, scegli un altro metodo di accesso remoto in DSH sul computer.</string>
     <string name="back_to_connections">Torna alle connessioni</string>
     <string name="setup_title">Connetti a DeepSeek Harness</string>
     <string name="setup_description">Trova DSH su questa rete Wi-Fi, quindi inserisci la chiave monouso mostrata sul computer.</string>
@@ -28,7 +28,7 @@
     <string name="discovery_description">Scansiona la rete locale e scegli un computer.</string>
     <string name="scan_prompt">Verifica che telefono e computer usino la stessa rete Wi-Fi o lo stesso hotspot.</string>
     <string name="pairing_title">Abbina questo telefono</string>
-    <string name="pairing_description">Inserisci la chiave monouso mostrata nella scheda Mobile di DSH sul computer.</string>
+    <string name="pairing_description">Inserisci la chiave monouso di abbinamento mostrata nel pannello di accesso mobile di DSH sul computer.</string>
     <string name="selected_harness">DSH selezionato</string>
     <string name="back_to_scan">Torna ai dispositivi</string>
     <string name="gateway_label">Indirizzo del gateway</string>
@@ -52,7 +52,7 @@
     <string name="pairing_in_progress">Abbinamento del telefono…</string>
     <string name="pairing_failed">Abbinamento non riuscito\nIl codice QR potrebbe essere scaduto o già usato, oppure il computer potrebbe non essere raggiungibile. Controlla la connessione, genera un nuovo QR e riprova subito.</string>
     <string name="pairing_tls_failed">Impossibile verificare l\'identità del computer\nL\'indirizzo non è raggiungibile oppure il certificato non corrisponde al codice QR. Verifica che sia lo stesso computer e genera un nuovo QR.</string>
-    <string name="pairing_tailscale_unreachable">Connessione Tailscale bloccata\nLa modalità VPN, proxy o DNS corrente non può raggiungere questo indirizzo .ts.net. Cambia nodo VPN o modalità proxy; se il problema continua, seleziona cpolar sul computer.</string>
+    <string name="pairing_tailscale_unreachable">Connessione Tailscale bloccata\nLa modalità VPN, proxy o DNS corrente non può raggiungere questo indirizzo .ts.net. Cambia nodo VPN o modalità proxy; se il problema continua, scegli un altro metodo di accesso remoto in DSH sul computer.</string>
     <string name="connect">Connetti</string>
     <string name="scan_action">Scansiona codice QR</string>
     <string name="scan_hint">Inquadra il codice QR mostrato sullo schermo del computer.</string>
@@ -199,4 +199,14 @@
     <string name="webview_update_action">Opzioni di aggiornamento</string>
     <string name="webview_continue">Continua</string>
     <string name="device_storage_unavailable">L’archiviazione sicura dei dispositivi associati non è disponibile. Sblocca il dispositivo e riapri l’app o riprova. L’operazione non è stata completata.</string>
+    <string name="same_host_title">Connessione automatica allo stesso computer</string>
+    <string name="same_host_limits">Predefinito: manuale. Il cambio avviene solo tra connessioni abbinate separatamente con identità autenticata corrispondente. La modalità automatica trasferisce il testo semplice supportato senza conferma. Allegati, riferimenti, registrazioni, operazioni in sospeso o stati non supportati richiedono conferma. Un conflitto nella destinazione o una migrazione non riuscita mantiene la pagina originale. Viene trasferito solo uno stato limitato di testo semplice; nessun messaggio viene reinviato.</string>
+    <string name="same_host_manual">Manuale</string>
+    <string name="same_host_enable">Cambio automatico con avviso</string>
+    <string name="same_host_switch_title">Cambiare connessione?</string>
+    <string name="same_host_switch_warning">Cambiare indirizzo ricarica DSH. Testo non inviato, allegati e stato della pagina potrebbero andare persi. Annulla per mantenere la pagina; salva o copia prima il lavoro.</string>
+    <string name="same_host_switch_confirm">Cambia e ricarica</string>
+    <string name="same_host_detect">Rileva e chiedi</string>
+    <string name="same_host_switched">Cambio automatico della connessione in corso…</string>
+    <string name="same_host_migration_retained">Migrazione non completata. La pagina originale è stata mantenuta.</string>
 </resources>

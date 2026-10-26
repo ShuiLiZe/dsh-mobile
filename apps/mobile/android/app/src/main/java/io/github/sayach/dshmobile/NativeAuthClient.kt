@@ -24,6 +24,7 @@ internal data class NativeSession(
     val sessionToken: String,
     val csrfToken: String,
     val sessionExpiresAt: Long,
+    val installationId: String? = null,
 )
 
 internal data class NativeProbe(
@@ -31,6 +32,7 @@ internal data class NativeProbe(
     val instanceId: String,
     val deviceId: String,
     val deviceExpiresAt: Long,
+    val installationId: String? = null,
 )
 
 internal enum class NativeAuthFailureKind {
@@ -220,6 +222,7 @@ internal object NativeAuthClient {
                 connection.instanceFollowRedirects = false
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("X-DSH-Mobile-Capabilities", "installation-id")
                 connection.setRequestProperty("Origin", origin.serialized)
                 connection.setRequestProperty("Sec-Fetch-Site", "same-origin")
                 cancellation?.throwIfCancelled()
@@ -309,7 +312,7 @@ private fun parseNativeSession(
     val actualKeys = mutableSetOf<String>()
     val keys = response.keys()
     while (keys.hasNext()) actualKeys += keys.next()
-    if (actualKeys != expectedKeys) invalidNativeAuthResponse()
+    if (actualKeys - "installationId" != expectedKeys) invalidNativeAuthResponse()
 
     val instanceId = requiredString(response, "instanceId", INSTANCE_ID_PATTERN)
     if (instanceId != expectedInstanceId) invalidNativeAuthResponse()
@@ -338,6 +341,7 @@ private fun parseNativeSession(
         sessionToken = sessionToken,
         csrfToken = csrfToken,
         sessionExpiresAt = sessionExpiresAt,
+        installationId = optionalInstallationId(response),
     )
 }
 
@@ -375,12 +379,12 @@ internal fun parseNativeProbeResponse(
     val keys = mutableSetOf<String>()
     val iterator = response.keys()
     while (iterator.hasNext()) keys += iterator.next()
-    if (keys != setOf("instanceId", "deviceId", "deviceExpiresAt")) invalidNativeAuthResponse()
+    if (keys - "installationId" != setOf("instanceId", "deviceId", "deviceExpiresAt")) invalidNativeAuthResponse()
     val instanceId = requiredString(response, "instanceId", INSTANCE_ID_PATTERN)
     if (instanceId != expectedInstanceId) invalidNativeAuthResponse()
     val deviceId = requiredString(response, "deviceId", DEVICE_ID_PATTERN)
     val deviceExpiresAt = requiredFutureEpoch(response, "deviceExpiresAt", now)
-    return NativeProbe(origin, instanceId, deviceId, deviceExpiresAt)
+    return NativeProbe(origin, instanceId, deviceId, deviceExpiresAt, optionalInstallationId(response))
 }
 
 internal fun parseGatewayMetadata(body: JSONObject): GatewayMetadata? {
@@ -415,3 +419,7 @@ internal fun readAtMost(input: InputStream, limit: Int): ByteArray {
     }
     return output.toByteArray()
 }
+
+/** Only authenticated native responses may supply this grouping hint; never discovery. */
+private fun optionalInstallationId(response: JSONObject): String? =
+    if (!response.has("installationId")) null else requiredString(response, "installationId", INSTANCE_ID_PATTERN)

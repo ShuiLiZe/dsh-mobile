@@ -14,6 +14,24 @@ class NativeAuthClientTest {
     private val now = 1_700_000_000_000L
 
     @Test
+    fun optionalInstallationIdentityIsStrictAndBackwardsCompatible() {
+        assertNull(parseSession(validPairResponse(), true).installationId)
+        assertEquals("b".repeat(64), parseSession(validPairResponse().put("installationId", "b".repeat(64)), true).installationId)
+        assertEquals("b".repeat(64), parseSession(validRenewResponse().put("installationId", "b".repeat(64)), false).installationId)
+        val probe = validProbeResponse().put("installationId", "b".repeat(64))
+        assertEquals("b".repeat(64), parseNativeProbeResponse(ByteArrayInputStream(probe.toString().toByteArray()), origin, instanceId, now).installationId)
+        listOf(JSONObject.NULL, 1, "", "B".repeat(64), "b".repeat(63)).forEach { bad ->
+            assertThrows(NativeAuthFailure::class.java) { parseSession(validPairResponse().put("installationId", bad), true) }
+            assertThrows(NativeAuthFailure::class.java) {
+                parseNativeProbeResponse(ByteArrayInputStream(validProbeResponse().put("installationId", bad).toString().toByteArray()), origin, instanceId, now)
+            }
+        }
+        assertThrows(NativeAuthFailure::class.java) {
+            parseSession(validPairResponse().put("installationId", "b".repeat(64)).put("instanceId", "b".repeat(64)), true)
+        }
+    }
+
+    @Test
     fun readsTheCompleteResponseBeforeTheLimit() {
         val source = "discovery".toByteArray()
 

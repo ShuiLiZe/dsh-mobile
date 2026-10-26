@@ -166,6 +166,30 @@ afterEach(() => {
 })
 
 describe('mobile native Back before layout navigation', () => {
+  it.each([false, true])('routes Back to the owned directory dialog before later capture listeners, busy: %s', busy => {
+    const view = new BackWindow()
+    const page = new BackDocument()
+    const dialog = new BackNode('DIALOG')
+    dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true')
+    dialog.setAttribute('open', ''); dialog.setAttribute('data-dshm-picker-dialog', 'true')
+    page.body.append(dialog)
+    const dismissed = vi.fn((event: Event) => { event.preventDefault(); if (!busy) dialog.remove() })
+    dialog.addEventListener('dsh-mobile:directory-picker-dismiss', dismissed)
+    const blocked = vi.fn()
+    const stop = installMobileNativeBack(view as never, page as never, blocked)
+    const later = vi.fn()
+    view.addEventListener('dsh-mobile:native-back', later, true)
+    const event = backEvent()
+    try {
+      view.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(true)
+      expect(dismissed).toHaveBeenCalledOnce()
+      expect(dialog.isConnected).toBe(busy)
+      expect(blocked).not.toHaveBeenCalled()
+      expect(later).not.toHaveBeenCalled()
+    } finally { stop(); view.removeEventListener('dsh-mobile:native-back', later, true) }
+  })
+
   it('closes only visible page and overlay surfaces in visual order', () => {
     const view = new BackWindow()
     const page = new BackDocument()
@@ -780,6 +804,7 @@ describe('mobile-control localization', () => {
       '--dsw-alias-interactive-bg-hover-danger', '--dsw-alias-interactive-bg-hover-solid',
       '--dsw-alias-label-primary', '--dsw-alias-label-primary-bluish',
       '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary',
+      '--dsw-alias-button-primary-fill', '--dsw-alias-button-primary-hover', '--dsw-alias-label-primary-foreground',
       '--dsw-alias-state-business-primary', '--dsw-alias-state-business-tertiary',
       '--dsw-alias-state-error-primary', '--dsw-alias-state-error-secondary',
       '--dsw-alias-state-success-primary', '--dsw-alias-state-success-tertiary',
@@ -1006,6 +1031,40 @@ describe('mobile-control localization', () => {
     expect(bridge).toContain('"notification.settings" -> activity.runOnUiThread')
     expect(bridge).toContain('onOpenTaskNotificationSettings')
     expect(activity).toContain('bridge.onOpenTaskNotificationSettings = ::openTaskNotificationSettings')
+  })
+
+  it('owns locale persistence as an independent disposable client effect', () => {
+    let deliver = () => {}
+    let disconnected = false
+    const writes: string[] = []
+    const root = { lang: 'en' }
+    class Observer {
+      constructor(callback: () => void) { deliver = callback }
+      observe() {}
+      disconnect() { disconnected = true }
+    }
+    vi.stubGlobal('document', {
+      documentElement: root,
+      querySelector: () => ({}),
+      set cookie(value: string) { writes.push(value) },
+    })
+    vi.stubGlobal('window', { location: { protocol: 'https:' }, MutationObserver: Observer })
+    const effects: Array<() => void | (() => void)> = []
+    apply({ effect: (effect, label) => { if (label?.includes('locale persistence')) effects.push(effect) },
+      get: () => { throw new Error('No additional service is needed') },
+      slots: { inject: () => () => {}, register: () => () => {} } })
+    expect(effects).toHaveLength(1)
+    const stop = effects[0]!()
+    expect(writes[0]).toMatch(/^dsh_ma_ui_locale=en;/u)
+    root.lang = 'it'
+    deliver()
+    expect(writes[1]).toMatch(/^dsh_ma_ui_locale=it;/u)
+    expect(typeof stop).toBe('function')
+    if (typeof stop === 'function') stop()
+    expect(disconnected).toBe(true)
+    root.lang = 'zh'
+    deliver()
+    expect(writes).toHaveLength(2)
   })
 
   it('remounts plugin-owned UI only when the DSH document language changes', () => {

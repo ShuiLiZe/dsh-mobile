@@ -9,7 +9,11 @@ internal class RestoreAttemptGate {
     @Volatile
     private var pendingRetry: Runnable? = null
 
+    @Volatile
+    private var pendingRestore: Int? = null
+
     val retryPending: Boolean get() = pendingRetry != null
+    val restorePending: Boolean get() = pendingRestore == generation
 
     /** Start another attempt and withdraw any queued retry from the preceding generation. */
     fun begin(): Int {
@@ -21,6 +25,7 @@ internal class RestoreAttemptGate {
     fun invalidate() {
         generation += 1
         pendingRetry = null
+        pendingRestore = null
     }
 
     /** Cancel a queued retry without invalidating the successful renewal that installs its cookies. */
@@ -29,6 +34,18 @@ internal class RestoreAttemptGate {
     }
 
     fun isCurrent(expectedGeneration: Int): Boolean = generation == expectedGeneration
+
+    /** Keep one renewal owner through network work and asynchronous Cookie installation. */
+    fun claimRestore(expectedGeneration: Int): Boolean {
+        if (!isCurrent(expectedGeneration) || pendingRestore != null) return false
+        pendingRestore = expectedGeneration
+        return true
+    }
+
+    /** A late completion cannot release a successor's renewal owner. */
+    fun completeRestore(expectedGeneration: Int) {
+        if (pendingRestore == expectedGeneration) pendingRestore = null
+    }
 
     /** Deliver a result only to the restore generation which requested it. */
     fun callback(expectedGeneration: Int, operation: () -> Unit): Runnable = Runnable {

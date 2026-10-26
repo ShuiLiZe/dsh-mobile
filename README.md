@@ -26,20 +26,20 @@
   <a href="#兼容性">兼容性</a> ·
   <a href="docs/README.md">文档</a> ·
   <a href="#贡献者">贡献者</a> ·
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14">更新记录</a> ·
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.18">更新记录</a> ·
   <a href="README.en.md">English</a>
 </p>
 
 > DSH Mobile 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **当前正式版本：0.6.14**。改善历史消息加载手势与侧栏入口共存，支持自有反向代理的 IPv6 回环／ULA 后端。Android App **0.6.5** 保持不变，无需同步升级。[更新与下载](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.14) · [完整更新记录](CHANGELOG.md)。
+> **当前正式版本：0.6.18**。远程目录选择支持新建文件夹，导航和按钮更紧凑，为文件夹列表留出更多空间；修复过期模块配置导致无法进入页面的问题，并增加受控 NAS 管理入口。独立发布的 App **0.6.8** 修复首次加载反复重开，插件功能仍兼容 App 0.6.7。[插件更新与下载](https://github.com/saya-ch/dsh-mobile/releases/tag/v0.6.18) · [完整更新记录](CHANGELOG.md)。
 >
 > **版本说明**：自插件 **0.6.2** 起，Android App 与插件独立编号、独立发布，版本号无需一致；插件升级不代表 App 需要同步升级。[兼容说明](#兼容性)。
 
 <p align="center">
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.5/dsh-mobile-android-v0.6.5.apk"><img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.5/dsh-mobile-android-v0.6.5.apk"><strong>下载 Android App 0.6.5</strong></a><br>
-  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/android-v0.6.5">版本说明与校验文件</a></sub>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.8/dsh-mobile-android-v0.6.8.apk"><img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/brand/app-icon-rounded.svg" alt="DSH Mobile 安卓应用图标" width="72" height="72"></a><br>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.6.8/dsh-mobile-android-v0.6.8.apk"><strong>下载 Android App 0.6.8</strong></a><br>
+  <sub><a href="https://github.com/saya-ch/dsh-mobile/releases/tag/android-v0.6.8">版本说明与校验文件</a></sub>
 </p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar、cloudflared、自建 FRP 或自有反向代理远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。电脑端分别启停局域网与远程访问、分别管理配对授权；Android App 统一显示已配对电脑。插件不修改 DeepSeek Harness 源码。
@@ -130,7 +130,7 @@ dsh plugin --profile web add dshmarket
 
 侧栏底部有其他插件入口时，**移动访问**会收起为手机图标；悬停可查看名称，点击仍打开原面板。独占该区域时恢复文字显示。
 
-端口说明：`dsh web --port` 修改 DSH Web 上游端口（默认 3080），插件会自动跟随；`dsh-mobile setup --port` 修改 Mobile HTTPS 监听端口（默认 3443），配对二维码会包含实际端口。
+端口说明：`dsh web --port` 修改 DSH Web 上游端口（默认 3080），插件会自动跟随；`dsh-mobile setup --port` 修改 Mobile HTTPS 监听端口（默认 3443），配对二维码会包含实际端口。若 DSH Desktop 以 `--port 0` 随机端口启动，网关跟随的是**当前实际端口**，`mobile-access/setup.json` 里的 `upstreamOrigin` 只是首次配置的快照，插件启动时会把它更新为当前端口——排查时不要把它当成网关实际使用的上游。
 
 <details>
 <summary>无界面主机、内网代理与额外来源网段</summary>
@@ -143,7 +143,7 @@ dsh plugin --profile web add dshmarket
 
 不安装 App 也可以访问：点击 **复制配对链接**，在手机浏览器中打开。局域网使用私有证书，浏览器首次访问可能提示不受信任；只在确认这是自己的 DSH 网关后按浏览器指引继续。公开证书的远程入口不应出现证书警告，若出现请检查通道和证书，不要直接忽略。
 
-手机浏览器中的配对和重新连接页面会按浏览器的 `Accept-Language` 显示简体中文、英文或意大利文；Android App 则跟随系统语言。DSH 内的插件控制面板继续跟随 DSH 当前语言。
+手机浏览器中的配对和重新连接页面支持简体中文、英文和意大利文。插件 0.6.16 起优先使用当前网关主机名下记住的 DSH 显示语言，没有可用偏好时再按浏览器的 `Accept-Language` 选择；清除网站数据或更换主机名可能重置偏好。Android 原生界面跟随系统语言；DSH 内的插件控制面板跟随 DSH 当前语言。
 
 浏览器手动配对时填写电脑端显示的 43 位配对码；以 `dsh1.` 或 `dsh2.` 开头的是 Android App 密钥，不要填入浏览器配对框。优先打开电脑端复制的配对链接，它会自动填写配对码；过期后在电脑端重新生成。
 
@@ -263,6 +263,8 @@ Android App 在“已配对设备”中统一显示电脑及其局域网／远�
 - 点按设备行可连接；右侧“…”和长按提供相同的操作面板，可编辑名称、立即检测、重新配对或删除本地记录。删除前会二次确认，并提供短暂撤销；撤销只恢复本机记录，不恢复电脑端已经撤销的授权。
 - 在 WebView 页面打开 DSH **设置 → 通用设置 → 切换电脑** 可回到已配对设备列表。在线收到电脑端撤销通知后，App 保留条目并显示“电脑端已移除”，停止自动重连，提供重新配对和删除本地记录。
 - **0.6.0 新增**：列表保持固定顺序，新配对追加到末尾，升级保留旧版可见顺序；操作面板提供 **上移／置顶**，顺序与启动选择分开。App 内还可长按左上角抽屉开关返回列表，短按仍开关抽屉；手机浏览器没有此原生动作。
+
+App 0.6.7 配合插件 0.6.16，可在列表 **设置 → 同电脑自动连接** 中选择 **手动**（默认）、**自动检测并提示** 或 **自动切换并提醒**。同一电脑的局域网和远程入口须分别配对；自动模式只迁移符合条件的当前会话纯文本草稿，不是完整页面状态迁移。附件、引用或待完成操作等情况需要确认，详见 [App 切换说明](apps/mobile/README.zh-CN.md#同电脑自动连接)。
 
 电脑端撤销会永久删除持久化存储中的设备记录及令牌摘要，而不是保留 `revokedAt` 标记；启动时也会清理旧版留下的已撤销记录。删除后，旧令牌与未知令牌一样返回 `401 authentication_failed`。现有 App 若在离线期间被撤销，再次检测时可能显示“配对已过期”，需要重新配对；在线会话仍会收到撤销通知并立即断开。
 
@@ -416,20 +418,25 @@ macOS 上局域网、cloudflared、自建 FRP 与自有反向代理可用；Funn
 | `0.6.11` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`、`0.2.1-alpha.2`、`0.2.1-alpha.3` 的隔离打包浏览器 CI；`0.2.0-rc.2` 与 `0.2.1-alpha.3` 另通过真实历史分页、滚动位置保持和手动加载检查。浏览器检查不代表所有手机内核、第三方插件或公网线路已验收 |
 | `0.6.12` | `0.2.1-rc.2` 的打包安装、移动启动、缺失 API 模拟、工作区实时读取、保留页面的断线恢复及移动设置；`0.2.0-rc.2` 搭配实际社区认证插件 `dsh-web-startup-auth@0.1.12` 的认证与资源回归。未将 Chromium 92 真机、任意认证插件或公网线路写成已验收 |
 | `0.6.13` | `0.2.0-rc.2`、`0.2.1-rc.2` 的打包图文 HTTP 400 恢复、Host 拒绝护栏与错误提示回归；网关 408/431 分类、三类受限诊断及四种 Gateway 工厂接线通过本地测试。DSH 源码、iroh P2P 和 Android 原生代码不在本版范围 |
+| `0.6.14` | 8 个 DSH 版本（`0.1.7-alpha.2`–`0.2.1-rc.2`）的发布 CI 打包浏览器作业全绿；本版未记录额外的逐版本人工验收范围 |
+| `0.6.15` | `0.2.1-rc.2` 的 Firefox 158 隐私模式真实管理面板配对、HTTPS 移动页面与工作区读取基线，以及静音 Blob 播放；发布 CI 8 版本全绿 |
+| `0.6.16` | `0.2.1-rc.2` 的相册选择、纯文本草稿经公开 DSH 输入接口传输、真实 mux 恢复与跨客户端待答问题；CI 另覆盖 `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`、`0.2.1-alpha.2`、`0.2.1-alpha.3` |
+| `0.6.17` | `0.2.0-rc.2`、`0.2.1-rc.2` 的 15 项真实打包 Chromium 目录选择检查、旧 WebView 缺失 API 模拟与工作区 mux 读取；发布后装入官方 Desktop `0.2.1-rc.2` 并核对包内文件一致 |
+| `0.6.18` | `0.2.1-rc.2` 上的 18 项真实打包 Chromium 目录选择检查，含紧凑布局、目录创建和取消；本机官方 Desktop `0.2.1-rc.3` 已装入候选并启用局域网与 Cloudflare 网关 |
 
 <details>
 <summary>历史版本验证记录</summary>
 
 | DSH Mobile 插件                         | 验证支持的 DeepSeek Harness 版本                             |
 | ----------------------------------------- | -------------------------------------------------------------- |
-| `0.5.5` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（npm 打包安装、隔离配对、移动页面启动及 WebSocket 工作区读取） |
-| `0.6.0` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（打包安装、配对、移动页面启动与 WebSocket 工作区读取）；另验证移动输入栏、模块设置及官方 Desktop 正常重启后的组件加载 |
-| `0.6.2` | `0.2.0-rc.2` 的打包旧 WebView 启动、触屏滚动与缺失 API／视口负对照通过；发布 CI 通过。未将 #187 报告者的实际旧设备写成已验收 |
-| `0.6.3` | `0.2.0-rc.2`、`0.2.1-alpha.2`（打包安装、隔离配对、移动页面与 WebSocket 工作区读取）；另验证输入栏、设置与扩展 Worker 的超时、流式传输和显式恢复 |
-| `0.6.4` | `0.2.0-rc.2`（打包安装、隔离配对、移动页面与 WebSocket 工作区读取）；另验证 72 组真实公共插槽输入栏布局、Windows Desktop 目录选择器组合及跨平台回归。社区 Desktop 2.0.17 的原报告远程超时仍未宣称验收 |
-| `0.6.5` | `0.2.0-rc.2`、`0.2.1-alpha.2` 的打包模块管理与移动设置回归；另验证 Windows cpolar 解包及正式 `maid-atelier` 0.1.7 下有内容轨迹的布局修复。不代表全部第三方皮肤或报告者设备已验收 |
-| `0.6.6` | `0.2.0-rc.2`、`0.2.1-alpha.2` 的打包附件接收与图片预览回归，覆盖多图、取消、迟到结果和旧请求；Android 系统选择器改进独立发布，不包含在 npm 更新中 |
 | `0.6.8` | `0.2.1-alpha.3` 的打包移动页面、旧 WebView API 模拟、WebSocket 工作区读取、移动设置、模块管理、侧栏及输入栏回归；身份修复另有真实 HTTP/TLS 与旧凭据升级测试。本机官方 Desktop `0.2.0-rc.2` 已加载该版本插件，原配对保留；不代表手机 5G 或全部第三方插件组合已验收 |
+| `0.6.6` | `0.2.0-rc.2`、`0.2.1-alpha.2` 的打包附件接收与图片预览回归，覆盖多图、取消、迟到结果和旧请求；Android 系统选择器改进独立发布，不包含在 npm 更新中 |
+| `0.6.5` | `0.2.0-rc.2`、`0.2.1-alpha.2` 的打包模块管理与移动设置回归；另验证 Windows cpolar 解包及正式 `maid-atelier` 0.1.7 下有内容轨迹的布局修复。不代表全部第三方皮肤或报告者设备已验收 |
+| `0.6.4` | `0.2.0-rc.2`（打包安装、隔离配对、移动页面与 WebSocket 工作区读取）；另验证 72 组真实公共插槽输入栏布局、Windows Desktop 目录选择器组合及跨平台回归。社区 Desktop 2.0.17 的原报告远程超时仍未宣称验收 |
+| `0.6.3` | `0.2.0-rc.2`、`0.2.1-alpha.2`（打包安装、隔离配对、移动页面与 WebSocket 工作区读取）；另验证输入栏、设置与扩展 Worker 的超时、流式传输和显式恢复 |
+| `0.6.2` | `0.2.0-rc.2` 的打包旧 WebView 启动、触屏滚动与缺失 API／视口负对照通过；发布 CI 通过。未将 #187 报告者的实际旧设备写成已验收 |
+| `0.6.0` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（打包安装、配对、移动页面启动与 WebSocket 工作区读取）；另验证移动输入栏、模块设置及官方 Desktop 正常重启后的组件加载 |
+| `0.5.5` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（npm 打包安装、隔离配对、移动页面启动及 WebSocket 工作区读取） |
 | `0.5.4` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（npm 打包安装、隔离配对、移动页面启动及 WebSocket 工作区读取） |
 | `0.5.3` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（源码契约、npm 打包安装、隔离配对、移动页面启动及 WebSocket 工作区读取） |
 | `0.5.2` | `0.1.7-alpha.2`、`0.1.7-rc.1`、`0.1.7-rc.2`、`0.2.0-rc.1`（延续既有验证）；`0.2.0-rc.2`（源码契约、隔离配对、移动页面启动和 WebSocket 工作区读取） |

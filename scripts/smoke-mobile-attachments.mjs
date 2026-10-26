@@ -123,6 +123,22 @@ async function launchCamera(page) {
   return count
 }
 
+async function launchGallery(page) {
+  const count = await page.evaluate(() => window.__attachmentDeliveryFixture.pickers.length)
+  await page.locator('[data-composer-card] button[aria-haspopup="listbox"]').first().click()
+  const gallery = page.getByRole('option', { name: 'Gallery', exact: true })
+  await gallery.waitFor({ state: 'visible', timeout: CLIENT_TIMEOUT_MS })
+  await page.waitForFunction(() => document.querySelector('[data-dsh-mobile-media-action="gallery"]')?.disabled === false,
+    undefined, { timeout: 15_000 })
+  await gallery.click()
+  await page.waitForFunction(previous => window.__attachmentDeliveryFixture.pickers.length === previous + 1, count)
+  assert.deepEqual(await page.evaluate(index => {
+    const input = window.__attachmentDeliveryFixture.pickers[index]
+    return { accept: input.accept, capture: input.hasAttribute('capture'), multiple: input.multiple }
+  }, count), { accept: 'image/*', capture: false, multiple: true }, 'Gallery must request multiple images without camera capture')
+  return count
+}
+
 async function deliverCamera(page, picker, names) {
   await page.evaluate(({ picker, names, base64 }) => {
     const input = window.__attachmentDeliveryFixture.pickers[picker]
@@ -160,7 +176,7 @@ try {
     window.__attachmentDeliveryFixture = fixture
     const originalClick = HTMLInputElement.prototype.click
     HTMLInputElement.prototype.click = function () {
-      if (this.type === 'file' && this.capture === 'environment' && this.accept === 'image/*') {
+      if (this.type === 'file' && this.accept === 'image/*') {
         fixture.pickers.push(this)
         return
       }
@@ -239,6 +255,31 @@ try {
     { names: ['browser-camera.png'], itemsIterable: true }, 'The handoff did not supply a usable DataTransfer item list')
   await clearImages(page, sessionId, ['browser-camera.png'])
 
+  const selectedGallery = await launchGallery(page)
+  const galleryImages = ['gallery-first.png', 'gallery-second.png']
+  await deliverCamera(page, selectedGallery, galleryImages)
+  await expectAttachments(page, sessionId, galleryImages)
+  assert.deepEqual(await page.evaluate(() => window.__attachmentDeliveryFixture.drops.at(-1)),
+    { names: galleryImages, itemsIterable: true }, 'Gallery did not reach DSH with iterable transfer items')
+  await clearImages(page, sessionId, galleryImages)
+
+  const cancelledGallery = await launchGallery(page)
+  await page.evaluate(index => window.__attachmentDeliveryFixture.pickers[index].dispatchEvent(new Event('cancel')), cancelledGallery)
+  await deliverCamera(page, cancelledGallery, ['cancelled-gallery.png'])
+  await frames(page)
+  assert.deepEqual(await snapshot(page, sessionId), initial, 'A cancelled Gallery changed the real draft or attachment state')
+
+  const staleGallery = await launchGallery(page)
+  // Gallery prevents reentry while busy; a camera request can supersede its generation.
+  const cameraAfterGallery = await launchCamera(page)
+  await deliverCamera(page, staleGallery, ['superseded-gallery.png'])
+  await frames(page)
+  assert.deepEqual(await snapshot(page, sessionId), initial, 'A superseded Gallery changed the real draft')
+  await deliverCamera(page, cameraAfterGallery, ['camera-after-gallery.png'])
+  const galleryState = await expectAttachments(page, sessionId, ['camera-after-gallery.png'])
+  assert.equal(galleryState.input.draft, initial.input.draft, 'Cross-media intake changed the held draft')
+  await clearImages(page, sessionId, ['camera-after-gallery.png'])
+
   const cancelled = await launchCamera(page)
   await page.evaluate(index => window.__attachmentDeliveryFixture.pickers[index].dispatchEvent(new Event('cancel')), cancelled)
   await deliverCamera(page, cancelled, ['cancelled-camera.png'])
@@ -266,7 +307,7 @@ try {
   await clearImages(page, sessionId, ['current-camera.png'])
   assert.deepEqual(pageErrors, [], 'Attachment consumer generated an unhandled page error')
   assert.equal(prompts.length, 0, 'Attachment testing attempted a model submission')
-  console.log('Packed DSH attachments passed native multi-file control, browser-camera handoff, actual input attachment identities and decoded previews, cancellation, late focus result, superseded result, and unchanged held draft. No prompt/model call was made; Android camera/bridge itself was not tested.')
+  console.log('Packed DSH attachments passed native multi-file control, browser-camera and Gallery handoff, image-only Gallery without capture, actual input attachment identities and decoded previews, Gallery/camera cancellation and superseded results, late camera focus result, and unchanged held draft. No prompt/model call was made; physical Android picker/camera/bridge was not tested.')
 } catch (error) {
   recordSmokeFailure(failures, new Error(`${sanitized(error instanceof Error ? error.stack ?? error.message : String(error))}\n${dsh?.logs() ?? ''}`))
 } finally {
