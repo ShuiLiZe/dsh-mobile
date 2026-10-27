@@ -73,7 +73,7 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('inset:max(env(safe-area-inset-top),0px) auto 0 0 !important; height:auto !important')
     expect(NATIVE_MOBILE_STYLES).toContain('width:min(88vw,340px) !important; padding-top:0 !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_logoRow"] { height:52px !important; padding:4px 0 4px 4px !important; margin-bottom:4px !important; }')
-    expect(NATIVE_MOBILE_STYLES).toContain('inset:env(safe-area-inset-top) 0 0; border:0; background:rgb(15 23 42 / 32%)')
+    expect(NATIVE_MOBILE_STYLES).toContain('inset:env(safe-area-inset-top) 0 0; border:0; background:var(--dsw-alias-bg-mask-1,rgb(0 0 0 / 24%))')
     expect(NATIVE_MOBILE_STYLES).toContain('box-sizing:border-box !important; width:50px !important; height:52px !important; padding:4px !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-toggle] > svg[class*="_railFish"] { transform:translateY(-4px) !important; }')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-sidebar]:has([data-dsh-mobile-settings]) { width:100vw !important; inset:0 !important; }')
@@ -276,6 +276,11 @@ describe('native mobile presentation', () => {
   it('spaces the message column through the shared flow gap so folded seats cost nothing', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-message-column] { box-sizing:border-box !important; width:100% !important; max-width:none !important; margin:0 !important; padding:0 !important; gap:0 !important; --dsh-chat-flow-gap:10px; }')
     expect(NATIVE_MOBILE_STYLES).not.toContain('margin:0 !important; padding:0 !important; gap:10px !important; }')
+  })
+
+  it('keeps the newer composer stat pills and context meter on one centred row', () => {
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-center] [data-composer-dock] { display:flex !important; flex-wrap:wrap !important; justify-content:center !important; align-items:center !important;')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-center] :is([data-composer-card] ~ [data-composer-dock],[data-composer-card] ~ * [data-composer-dock]) > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup]) { box-sizing:border-box !important; width:auto !important; max-width:none !important; flex:0 0 auto !important; align-self:center !important; margin:0 !important; padding:0 !important;')
   })
 
   it('wraps the composer dock instead of assuming a fixed column count', () => {

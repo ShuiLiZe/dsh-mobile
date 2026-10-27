@@ -2,7 +2,15 @@ package io.github.sayach.dshmobile
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.hardware.Camera
 import android.os.Bundle
@@ -152,18 +160,15 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
         root.addView(preview, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER))
 
         scanFrame = View(this).apply {
-            background = GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                setStroke(dp(2), Color.WHITE)
-            }
+            // Four 2dp corners instead of a full box: the camera preview stays unobstructed.
+            background = cornerFrame()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         root.addView(scanFrame, FrameLayout.LayoutParams(dp(260), dp(260), Gravity.CENTER))
 
         scanHint = TextView(this).apply {
             text = getString(R.string.scan_hint)
-            setTextColor(Color.WHITE)
-            textSize = 15f
+            applyDshType(DshNativeType.BODY, Typeface.NORMAL, Color.WHITE, DshNativeType.LINE_BODY)
             gravity = Gravity.CENTER
             setPadding(dp(16), 0, dp(16), 0)
         }
@@ -173,7 +178,7 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply { setColor(Color.BLACK); cornerRadius = dp(24).toFloat() }
+            background = pillBackground()
             setPadding(dp(8), 0, dp(8), 0)
         }
         fun zoomButton(label: Int, glyph: Int, direction: Int): ImageButton = ImageButton(this).apply {
@@ -190,8 +195,7 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
         zoomOut = zoomButton(R.string.scan_zoom_out, R.drawable.ic_scan_zoom_out, -1)
         zoomIn = zoomButton(R.string.scan_zoom_in, R.drawable.ic_scan_zoom_in, 1)
         zoomLabel = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 16f
+            applyDshType(DshNativeType.BODY, Typeface.BOLD, Color.WHITE)
             gravity = Gravity.CENTER
             setPadding(dp(8), 0, dp(8), 0)
             minWidth = dp(56)
@@ -204,9 +208,10 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
         updateZoomControls()
 
         val close = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            setImageResource(R.drawable.ic_close)
             imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
-            setBackgroundColor(Color.TRANSPARENT)
+            background = circleBackground()
+            setPadding(dp(14), dp(14), dp(14), dp(14))
             contentDescription = getString(R.string.scan_close)
             setOnClickListener { finish() }
         }
@@ -215,6 +220,82 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
             marginStart = dp(16)
         })
         return root
+    }
+
+    /** Four corner strokes: a viewfinder that frames the code without boxing the preview. */
+    private fun cornerFrame(): Drawable {
+        val stroke = dp(2)
+        val length = dp(34)
+        val radius = DshNativeDimens.dp(this, 12).toFloat()
+        return object : Drawable() {
+            private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = Paint.Style.STROKE
+                strokeWidth = stroke.toFloat()
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+            }
+            private val corners = arrayOf(
+                RectF(0f, 0f, length.toFloat(), length.toFloat()),
+                RectF(0f, 0f, length.toFloat(), length.toFloat()),
+                RectF(0f, 0f, length.toFloat(), length.toFloat()),
+                RectF(0f, 0f, length.toFloat(), length.toFloat()),
+            )
+
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                val inset = stroke / 2f
+                corners[0].set(inset, inset, inset + length, inset + length)
+                canvas.drawPath(cornerPath(corners[0], radius, 1f, 1f), paint)
+                corners[1].set(w - inset - length, inset, w - inset, inset + length)
+                canvas.drawPath(cornerPath(corners[1], radius, -1f, 1f), paint)
+                corners[2].set(inset, h - inset - length, inset + length, h - inset)
+                canvas.drawPath(cornerPath(corners[2], radius, 1f, -1f), paint)
+                corners[3].set(w - inset - length, h - inset - length, w - inset, h - inset)
+                canvas.drawPath(cornerPath(corners[3], radius, -1f, -1f), paint)
+            }
+
+            private fun cornerPath(box: RectF, radius: Float, sx: Float, sy: Float): Path {
+                val path = Path()
+                val pivot = if (sx > 0f && sy > 0f) {
+                    floatArrayOf(box.left, box.top, box.left, box.bottom, box.right, box.top)
+                } else if (sx < 0f && sy > 0f) {
+                    floatArrayOf(box.right, box.top, box.right, box.bottom, box.left, box.top)
+                } else if (sx > 0f) {
+                    floatArrayOf(box.left, box.bottom, box.left, box.top, box.right, box.bottom)
+                } else {
+                    floatArrayOf(box.right, box.bottom, box.right, box.top, box.left, box.bottom)
+                }
+                path.moveTo(pivot[2], pivot[3])
+                path.lineTo(pivot[0], pivot[1])
+                path.lineTo(pivot[4], pivot[5])
+                return path
+            }
+
+            override fun setAlpha(alpha: Int) {
+                paint.alpha = alpha
+            }
+
+            override fun setColorFilter(colorFilter: ColorFilter?) {
+                paint.colorFilter = colorFilter
+            }
+
+            @Deprecated("Deprecated in the platform Drawable API")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+    }
+
+    /** Translucent surface behind the zoom controls, matching the native card language. */
+    private fun pillBackground(): Drawable = GradientDrawable().apply {
+        setColor(Color.argb(0xC4, 0x11, 0x11, 0x13))
+        cornerRadius = dp(24).toFloat()
+    }
+
+    /** Circular close control; the camera preview needs its own contrast, not the theme colours. */
+    private fun circleBackground(): Drawable = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(Color.argb(0x52, 0x00, 0x00, 0x00))
     }
 
     private fun openCamera() {

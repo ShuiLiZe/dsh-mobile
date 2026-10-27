@@ -97,6 +97,10 @@ internal val INITIAL_DSH_READY_PROBE = """
 """.trimIndent()
 internal fun mountedDshProbeResult(result: String?): Boolean = result == "true"
 
+/** Parses the JSON string evaluateJavascript returns for DSH's `--dsh-boot-arc` (e.g. "\"144deg\""). */
+internal fun dshBootArcDegrees(result: String?): Float? =
+    result?.trim()?.removeSurrounding("\"")?.trim()?.removeSuffix("deg")?.toFloatOrNull()
+
 /** Ask the current page to close one mobile-owned layer before native navigation. */
 internal const val MOBILE_BACK_SCRIPT = "(() => { const event = new Event('dsh-mobile:native-back', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented })()"
 internal enum class MobileBackEvaluation { CONSUMED, UNHANDLED, UNAVAILABLE }

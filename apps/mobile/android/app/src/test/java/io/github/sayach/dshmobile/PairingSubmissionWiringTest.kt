@@ -9,7 +9,7 @@ class PairingSubmissionWiringTest {
     @Test fun theSharedConnectionEntryClaimsItsGateBeforeSendingAnyPairRequest() {
         val source = activitySource()
         val form = source.substringAfter("private fun showPairing(").substringBefore("private fun createSetupCard(")
-        assertTrue(form.contains("primaryButton(R.string.connect, 52) { connect(harness, pairing, status, this) }"))
+        assertTrue(form.contains("primaryButton(R.string.connect, 52) { b -> this@MainActivity.connect(harness, pairing, status, b); Unit }"))
         assertTrue(form.substringAfter("setOnEditorActionListener").contains("connect(harness, pairing, status, connect)"))
         val connect = source.substringAfter("private fun connect(").substringBefore("private fun showCompatibilityIssue(")
         assertTrue(connect.indexOf("if (pairingAttemptGate.busy) return") < connect.indexOf("val input ="))

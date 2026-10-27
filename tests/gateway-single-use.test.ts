@@ -14,6 +14,8 @@ interface Observation {
   method: string
   headers: IncomingHttpHeaders
   socket: Socket
+  /** Raw header at accept time, immune to later mutation of `headers`. */
+  connection: string | undefined
 }
 interface Result { status: number; body: Buffer; headers: IncomingHttpHeaders }
 interface Fixture {
@@ -23,7 +25,7 @@ interface Fixture {
   signal: AbortSignal
   root: string
   upstreamListening: () => boolean
-  invoke: (path: string, options?: { method?: string; body?: Buffer }) => Promise<Result>
+  invoke: (path: string, options?: { method?: string; body?: Buffer; headers?: Record<string, string> }) => Promise<Result>
 }
 const upstreamCookie = 'dsh-auth-test=v1.signed-cookie'
 const payload = Buffer.from([0, 255, 128, 13, 10, 65, 0])
@@ -41,6 +43,7 @@ async function withFixture(
   run: (fixture: Fixture) => Promise<void>,
   authenticatedUpstream = false,
   deadlineMs = 8_000,
+  upstreamOptions: { keepAliveTimeout?: number; headersTimeout?: number; pooled?: boolean } = {},
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-single-use-'))
   const controller = new AbortController()
@@ -55,6 +58,7 @@ async function withFixture(
     observations.push({
       path: incoming.url ?? '', method: incoming.method ?? '',
       headers: incoming.headers, socket: incoming.socket,
+      connection: incoming.headers.connection,
     })
     // Bodyless responses end immediately: no artificial drain/delay masks early replies.
     if (authenticatedUpstream && incoming.url === '/?token=single-use-launch') {
@@ -66,6 +70,10 @@ async function withFixture(
   })
   let upstreamStarted = false
   const upstreamClosed = new Promise<void>(resolve => upstream.once('close', resolve))
+  // Node's 5s default idle timeout would reap a pooled socket mid-fixture; the
+  // pooling test owns the lifetime explicitly and closes it with the gateway.
+  if (upstreamOptions.keepAliveTimeout !== undefined) upstream.keepAliveTimeout = upstreamOptions.keepAliveTimeout
+  if (upstreamOptions.headersTimeout !== undefined) upstream.headersTimeout = upstreamOptions.headersTimeout
   upstream.on('connection', socket => {
     sockets.add(socket)
     socketClosed.push(new Promise<void>(resolve => {
@@ -115,6 +123,7 @@ async function withFixture(
             connection: 'keep-alive, x-mobile-hop', 'x-mobile-hop': 'must-not-forward',
             cookie: `${SESSION_COOKIE}=${paired.sessionToken}; mobile-secret=private`,
             authorization: 'Bearer mobile-secret', [CSRF_HEADER]: paired.csrfToken,
+            ...options.headers,
             ...(options.body === undefined ? {} : {
               'content-length': options.body.length, 'content-type': 'application/octet-stream',
             }),
@@ -136,16 +145,17 @@ async function withFixture(
     await run({ gateway: instance, observations, upstreamHost, invoke, signal, root,
       upstreamListening: () => upstream.listening })
     signal.throwIfAborted()
-    // Prove transport-owned closure before teardown can forcibly close any socket.
+    // Base-run proof: every request path that does not pool closes its socket by
+    // itself. The pooling run owns a keep-alive socket instead and proves below
+    // that `gateway.close()` drains it.
     let deadline: ReturnType<typeof setTimeout> | undefined
     try {
-      await Promise.race([
+      if (!upstreamOptions.pooled) await Promise.race([
         Promise.all(socketClosed),
         new Promise<never>((_resolve, reject) => {
           deadline = setTimeout(() => reject(new Error('Upstream sockets remained open after response completion')), 2_000)
         }),
       ])
-      expect(sockets.size).toBe(0)
     } finally {
       if (deadline !== undefined) clearTimeout(deadline)
     }
@@ -155,10 +165,16 @@ async function withFixture(
     clearTimeout(watchdog)
     controller.abort()
     // Completion-based teardown also runs after setup/assertion errors; no sleeps or leaked listeners.
+    let gatewayClosed = false
     try {
       for (const caller of callers) caller.destroy()
       await Promise.allSettled(callers.map(caller => caller.settled))
       await gateway?.close()
+      gatewayClosed = true
+      // `close()` owns the transport: after it returns DSH must see no live
+      // upstream connection, pooled or not.
+      await Promise.all(socketClosed)
+      expect(sockets.size).toBe(0)
     } finally {
       try {
         const closed = upstream.listening
@@ -167,19 +183,19 @@ async function withFixture(
         for (const socket of sockets) socket.destroy()
         await closed
         await Promise.all(socketClosed)
+        if (upstreamOptions.pooled && !gatewayClosed) void gateway?.close()
         if (upstreamStarted) await upstreamClosed
       } finally { await rm(root, { recursive: true, force: true }) }
     }
   }
 }
-
 function expectOwnedFreshRequests(fixture: Fixture, count: number, cookie?: string): void {
   expect(fixture.observations).toHaveLength(count)
   // Socket object identity, not ephemeral port numbers, proves no connection reuse/pool.
   expect(new Set(fixture.observations.map(observation => observation.socket)).size).toBe(count)
   for (const observation of fixture.observations) {
-    // Node's existing agent:false framing closes each upstream, never copying the phone's Connection.
-    expect(observation.headers.connection).toBe('close')
+    // Node's existing unpooled framing closes each upstream, never copying the phone's Connection.
+    expect(observation.connection).toBe('close')
     expect(observation.headers.host).toBe(fixture.upstreamHost)
     expect(observation.headers.authorization).toBeUndefined()
     expect(observation.headers['x-mobile-hop']).toBeUndefined()
@@ -188,7 +204,7 @@ function expectOwnedFreshRequests(fixture: Fixture, count: number, cookie?: stri
   }
 }
 
-describe('gateway existing agent:false upstream HTTP isolation', { timeout: 10_000 }, () => {
+describe('gateway upstream socket isolation for streaming, mutating, and unframed requests', { timeout: 10_000 }, () => {
   it('uses one fresh socket per sequential and concurrent authorized API GET with intact binary bodies', async () => {
     await withFixture((_incoming, response) => {
       response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': payload.length })
@@ -279,13 +295,18 @@ describe('gateway existing agent:false upstream HTTP isolation', { timeout: 10_0
     await expect(stat(setup!.root)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('retains agent:false close framing on all five outgoing paths and forwards only the configured upstream auth cookie', async () => {
+  it('retains agent:false close framing on every streaming or unbuffered outgoing path', async () => {
     await withFixture((incoming, response) => {
       if (incoming.url === '/') {
         response.writeHead(200, { 'content-type': 'text/html' })
         response.end('<!doctype html><title>single-use index</title>')
       } else if (incoming.url?.startsWith('/plugins/')) {
-        response.writeHead(200, { 'content-type': 'text/javascript', 'content-length': bundle.length })
+        // Pooled reads answer with an explicit length so the keep-alive parser
+        // knows where the message ends; anything else still closes its socket.
+        response.writeHead(200, {
+          'content-type': 'text/javascript', 'content-length': bundle.length,
+          connection: incoming.headers.connection === 'close' ? 'close' : 'keep-alive',
+        })
         response.end(bundle)
       } else { response.writeHead(200); response.end(payload) }
     }, async fixture => {
@@ -306,5 +327,48 @@ describe('gateway existing agent:false upstream HTTP isolation', { timeout: 10_0
       expectOwnedFreshRequests(fixture, 5, upstreamCookie)
       expect(main.headers['set-cookie']).toBeUndefined()
     }, true)
+  })
+
+  it('pools bodyless plugin and asset reads on one upstream socket and keeps API and range requests unpooled', async () => {
+    await withFixture((incoming, response) => {
+      if (incoming.url?.startsWith('/api/')) {
+        response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': payload.length })
+        response.end(payload)
+        return
+      }
+      const body = incoming.url?.startsWith('/assets/') ? Buffer.from('export const a = 1\n') : bundle
+      response.writeHead(200, {
+        'content-type': 'text/javascript', 'content-length': body.length,
+        connection: incoming.headers.connection === 'close' ? 'close' : 'keep-alive',
+      })
+      response.end(body)
+    }, async fixture => {
+      for (let index = 0; index < 3; index++) {
+        const proxied = await fixture.invoke(`/plugins/pooled.js?rev=pooled_${String(index)}`)
+        expect(proxied.status).toBe(200)
+        expect(proxied.body).toEqual(bundle)
+      }
+      const asset = await fixture.invoke('/assets/chunk-abcdef12.js')
+      expect(asset.status).toBe(200)
+      const pooled = fixture.observations.slice()
+      expect(pooled).toHaveLength(4)
+      // Socket identity proves reuse: four phone requests reached DSH on one connection.
+      expect(new Set(pooled.map(observation => observation.socket)).size).toBe(1)
+      expect(pooled.every(observation => observation.connection !== 'close')).toBe(true)
+
+      // API reads may sit unanswered for minutes; they must never ride the pool.
+      const api = await fixture.invoke('/api/pooled-excluded')
+      expect(api.status).toBe(200)
+      expect(api.body).toEqual(payload)
+      const ranged = await fixture.invoke('/plugins/pooled.js?rev=pooled_0', { headers: { range: 'bytes=0-9' } })
+      expect(ranged.status).toBe(200)
+      const unpooled = fixture.observations.slice(4)
+      expect(unpooled.map(observation => observation.path)).toEqual([
+        '/api/pooled-excluded', '/plugins/pooled.js?rev=pooled_0',
+      ])
+      expect(unpooled.every(observation => observation.connection === 'close')).toBe(true)
+      expect(unpooled.every(observation => !pooled.some(cached => cached.socket === observation.socket))).toBe(true)
+      // The fixture's teardown calls gateway.close() and proves the pooled socket is gone.
+    }, false, 8_000, { keepAliveTimeout: 60_000, headersTimeout: 65_000, pooled: true })
   })
 })

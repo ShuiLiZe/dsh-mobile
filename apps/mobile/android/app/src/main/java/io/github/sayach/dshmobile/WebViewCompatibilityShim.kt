@@ -17,6 +17,7 @@ internal fun installBrowserCompatibilityShim(webView: WebView, origin: GatewayOr
     if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return false
     return runCatching {
         WebViewCompat.addDocumentStartJavaScript(webView, BROWSER_COMPATIBILITY_SHIM, browserCompatibilityOrigins(origin))
+        runCatching { WebViewCompat.addDocumentStartJavaScript(webView, DSH_LONG_ARC_LOADER, browserCompatibilityOrigins(origin)) }
         true
     }.getOrDefault(false)
 }
@@ -51,5 +52,21 @@ internal const val BROWSER_COMPATIBILITY_SHIM = """
       });
     }
   } catch (error) { /* A non-extensible Promise constructor cannot receive this optional fallback. */ }
+})();
+"""
+
+/** DSH's boot spinner arc breathes 30-270 degrees while it turns, matching the native ring. */
+internal const val DSH_LONG_ARC_DEGREES = 240
+
+internal const val DSH_LONG_ARC_LOADER = """
+(function () {
+  try {
+    var style = document.createElement('style');
+    style.setAttribute('data-dsh-mobile-long-arc', '');
+    style.textContent = '@property --dsh-boot-arc{syntax:"<angle>";inherits:true;initial-value:72deg}'
+      + '@keyframes dshm-boot-arc{0%,100%{--dsh-boot-arc:30deg;transform:rotate(0deg)}50%{--dsh-boot-arc:270deg;transform:rotate(-120deg)}}'
+      + '[data-dsh-boot-spinner]::after{animation:dshm-boot-arc 1.6s ease-in-out infinite}';
+    (document.head || document.documentElement).appendChild(style);
+  } catch (error) { /* DSH keeps its own progress arc. */ }
 })();
 """

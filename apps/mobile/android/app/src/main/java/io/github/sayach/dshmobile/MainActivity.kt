@@ -3,15 +3,15 @@ package io.github.sayach.dshmobile
 import android.annotation.SuppressLint
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.ClipData
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.net.Uri
@@ -46,7 +46,6 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -118,6 +117,9 @@ class MainActivity : Activity() {
     private data class StagedBrowser(val browser: WebView, val bridge: NativeBridge)
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
+
+    /** App color resolved from the last synchronized DSH theme, else the DSH default resource. */
+    private fun themeColor(colorResource: Int): Int = DshNativeTheme.resolve(this, preferences, colorResource)
     private val lanCredentialStore by lazy { DeviceCredentialStore(this, "lan") }
     private val remoteCredentialStore by lazy { DeviceCredentialStore(this, "remote") }
     private val pairedDeviceStore by lazy { PairedDeviceStore(this) }
@@ -150,10 +152,15 @@ class MainActivity : Activity() {
     private var pendingConnection: ConnectionAttemptController.Attempt? = null
     private var connectionCancellationAction: ((ConnectionAttemptController.Reason) -> Unit)? = null
     private var connectionWaitingView: FrameLayout? = null
-    private var connectionCancelButton: Button? = null
+    private var connectionCancelButton: TextView? = null
     private var connectionFullWaitingView: FrameLayout? = null
-    private var connectionFullCancelButton: Button? = null
+    private var connectionFullCancelButton: TextView? = null
     private var connectionPageVisible = false
+    /** The ring on the native loader; it mirrors DSH's own boot progress while DSH loads behind it. */
+    private var connectionLoaderSpinner: DshRingSpinner? = null
+
+    /** The address field of the LAN setup, so the empty state can jump straight to typing. */
+    private var setupAddressField: EditText? = null
     private val waitingRootAccessibility = mutableMapOf<View, Int>()
     private val waitingRootFocusability = mutableMapOf<ViewGroup, Int>()
     private var pageReadyCheck: Runnable? = null
@@ -190,7 +197,7 @@ class MainActivity : Activity() {
     private var fileChooserNavigationListener: androidx.webkit.NavigationListener? = null
     private val fileChooserTransitions = WebFileChooserTransitions<androidx.webkit.Navigation>()
     private var pendingDownload: PendingDownload? = null
-    private var failureDialog: AlertDialog? = null
+    private var failureDialog: DshActionSheet? = null
     private var retryUrl: String? = null
     private var pendingScan: (() -> Unit)? = null
     private var nearbyPermissionLimited = false
@@ -202,6 +209,7 @@ class MainActivity : Activity() {
     private val pairingGeneration: Int get() = pairingAttemptGate.generation
     private var connectionCenterStatus: TextView? = null
     private var recoveryAttempt = 0
+    private var lastForegroundProbeAt = 0L
     private val recoveryScheduled: Boolean get() = restoreAttemptGate.retryPending
     private val warnedTailscaleOrigins = mutableSetOf<String>()
     private val deviceStatusPoller by lazy {
@@ -227,7 +235,8 @@ class MainActivity : Activity() {
         savedInstanceState?.getInt(STATE_NEXT_FILE_CHOOSER_CODE)?.let(webFileChooserRequestCodes::restoreAtLeast)
         cleanupStaleDownloadFiles(cacheDir)
         configureEdgeToEdgeWindow(window)
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        window.setBackgroundDrawable(ColorDrawable(themeColor(R.color.app_background)))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
         nearbyPermissionLimited = preferences.getBoolean(PREFERENCE_NEARBY_PERMISSION_LIMITED, false)
         migrateLegacyDeviceSlots()
         val retainedHandoff = lastNonConfigurationInstance as? RetainedBridgeHandoff
@@ -328,6 +337,32 @@ class MainActivity : Activity() {
         webView?.onResume()
         window.decorView.requestApplyInsets()
         if (deviceListVisible && showingSetup) refreshDeviceStatuses(pairedDeviceStore.load())
+        probeAfterForegroundReturn()
+    }
+
+    /**
+     * A page that was rendered before the phone slept or lost Wi-Fi keeps showing stale content.
+     * One bounded liveness check restores trust and transport; the interval guard keeps repeated
+     * resumes from issuing a burst of requests.
+     */
+    private fun probeAfterForegroundReturn() {
+        if (isFinishing || isDestroyed || pendingConnection != null) return
+        if (webView == null || gatewayOrigin == null) return
+        if (failureDialog?.isShowing == true) return
+        val now = System.currentTimeMillis()
+        if (!ConnectionBackoff.shouldProbeOnForeground(lastForegroundProbeAt, now)) return
+        lastForegroundProbeAt = now
+        if (!canRecoverAutomatically()) return
+        if (recoveryScheduled) return
+        val browser = webView ?: return
+        val origin = gatewayOrigin ?: return
+        // A page DSH still has mounted reconnects on its own, so coming back from the background
+        // never flashes the native loader over it; only a lost page goes through recovery.
+        probeMountedDshPage(browser, origin) { mounted ->
+            if (mounted || isFinishing || isDestroyed || webView !== browser
+                || pendingConnection != null || recoveryScheduled) return@probeMountedDshPage
+            if (!scheduleAutomaticRecovery()) return@probeMountedDshPage
+        }
     }
 
     override fun onPause() {
@@ -567,66 +602,106 @@ class MainActivity : Activity() {
         currentFocus?.let { focused ->
             getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(focused.windowToken, 0)
         }
+        val loaderBackground = dshLoaderBackground()
         val waiting = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(loaderBackground)
             isClickable = true
             isFocusableInTouchMode = true
             accessibilityPaneTitle = message
             // Receive unconsumed Insets before the real page while still drawing above it.
             translationZ = dp(1).toFloat()
         }
-        addSetupArtwork(waiting)
-        for (index in 0 until waiting.childCount) waiting.getChildAt(index).importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
-            setPadding(dp(32), dp(32), dp(32), dp(32))
-        }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            addView(ProgressBar(this@MainActivity).apply {
-                indeterminateTintList = ColorStateList.valueOf(getColor(R.color.app_accent))
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(dp(48), dp(48)))
-            addView(spacer(16))
-            addView(TextView(this@MainActivity).apply {
-                text = message
-                textSize = 16f
-                gravity = Gravity.CENTER
-                setTextColor(getColor(R.color.app_secondary))
-                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(spacer(24))
-            val cancel = secondaryButton(
-                if (preserveBrowser == null) R.string.connection_cancel else R.string.connection_stop_reconnecting,
-                48,
-            ) { connectionAttempts.cancel(attempt) }
-            connectionCancelButton = cancel
-            addView(cancel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        scroll.addView(content, FrameLayout.LayoutParams(
-            min((resources.displayMetrics.widthPixels - dp(64)).coerceAtLeast(1), dp(400)),
+        // The same wordmark, ring and caption DSH's web shell shows while it boots, at the same
+        // place, so handing over to the web loader has no visible seam.
+        val content = dshLoaderColumn(message)
+        DshNativeMotion.fadeIn(content, this)
+        waiting.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.CENTER_HORIZONTAL,
+            Gravity.CENTER,
         ))
-        scroll.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val width = (right - left - scroll.paddingLeft - scroll.paddingRight).coerceIn(1, dp(400))
-            if (content.layoutParams.width != width) content.layoutParams = content.layoutParams.apply { this.width = width }
-        }
-        waiting.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val cancel = cancelPill(
+            if (preserveBrowser == null) R.string.connection_cancel else R.string.connection_stop_reconnecting,
+        ) { _ -> connectionAttempts.cancel(attempt) }
+        connectionCancelButton = cancel
+        waiting.addView(cancel, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+        ))
         waiting.setOnApplyWindowInsetsListener { _, insets ->
             val edges = resolveWebViewSafeArea(insets)
-            scroll.setPadding(dp(32) + edges.left, dp(32) + edges.top, dp(32) + edges.right, dp(32) + edges.bottom)
+            content.setPadding(dp(32) + edges.left, edges.top, dp(32) + edges.right, edges.bottom)
+            (cancel.layoutParams as FrameLayout.LayoutParams).let { layout ->
+                val bottom = dp(CANCEL_PILL_BOTTOM_DP) + edges.bottom
+                if (layout.bottomMargin != bottom) {
+                    layout.bottomMargin = bottom
+                    cancel.layoutParams = layout
+                }
+            }
             insets
         }
         connectionWaitingView = waiting
         connectionFullWaitingView = waiting
         connectionFullCancelButton = connectionCancelButton
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, loaderBackground)
         attachConnectionWaitingView()
         return attempt
     }
+
+    /** The web shell's own background, so the native loader and DSH's loader share one canvas. */
+    private fun dshLoaderBackground(): Int =
+        preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background))
+
+    /**
+     * Wordmark, thin ring and one quiet caption: the loader DSH's web shell shows while it boots.
+     * Every native waiting surface uses this column so the hand-over is seamless.
+     */
+    private fun dshLoaderColumn(caption: CharSequence): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        addView(TextView(this@MainActivity).apply {
+            text = getString(R.string.dsh_loader_wordmark)
+            gravity = Gravity.CENTER
+            // DSH's web wordmark: 16px, weight 600, 0.08em tracking.
+            applyDshType(16f, Typeface.BOLD, themeColor(R.color.app_foreground), letterSpacingEm = 0.08f)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(spacer(16))
+        addView(dshWaitingIndicator().also {
+            it.setProgressSweep(DSH_LONG_ARC_DEGREES.toFloat())
+            connectionLoaderSpinner = it
+        }, LinearLayout.LayoutParams(dp(24), dp(24)))
+        addView(spacer(16))
+        addView(TextView(this@MainActivity).apply {
+            text = caption
+            gravity = Gravity.CENTER
+            applyDshType(12f, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_CAPTION)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    /** DSH's thin ring loader; still when the system asks to reduce animation. */
+    private fun dshWaitingIndicator(): DshRingSpinner = DshRingSpinner(
+        this,
+        // DSH's track is the label colour at 10% (12% on dark).
+        (0x1A shl 24) or (themeColor(R.color.app_foreground) and 0x00FFFFFF),
+        themeColor(R.color.app_foreground),
+    )
+
+    /** The low-emphasis cancel control used over every loader: a hairline pill, never a slab. */
+    private fun cancelPill(textResource: Int, onClick: (TextView) -> Unit): TextView =
+        quietPill(
+            this,
+            getString(textResource),
+            themeColor(R.color.app_secondary),
+            themeColor(R.color.app_border),
+            themeColor(R.color.app_surface_tinted),
+        ).apply {
+            setOnClickListener { onClick(this) }
+        }
 
     /** Only presentation is detached when the real form/browser root changes. */
     private fun detachConnectionWaitingView() {
@@ -672,27 +747,24 @@ class MainActivity : Activity() {
     private fun showCompactConnectionWaiting(attempt: ConnectionAttemptController.Attempt, stopReconnecting: Boolean = false) {
         if (pendingConnection !== attempt || !connectionAttempts.isCurrent(attempt)) return
         detachConnectionWaitingView()
-        val cancel = secondaryButton(
+        val cancel = cancelPill(
             if (stopReconnecting) R.string.connection_stop_reconnecting else R.string.connection_cancel,
-            48,
-        ) { connectionAttempts.cancel(attempt) }
+        ) { _ -> connectionAttempts.cancel(attempt) }
+        // Same pill, same place as on the native loader, so it does not jump at the hand-over.
         val compact = FrameLayout(this).apply {
             isClickable = false
             isFocusable = false
             translationZ = dp(1).toFloat()
             addView(cancel, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.END,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
             ))
             setOnApplyWindowInsetsListener { _, insets ->
                 val edges = resolveWebViewSafeArea(insets)
                 val layout = cancel.layoutParams as FrameLayout.LayoutParams
-                if (layout.leftMargin != dp(16) + edges.left || layout.topMargin != dp(16) + edges.top
-                    || layout.rightMargin != dp(16) + edges.right || layout.bottomMargin != dp(16) + edges.bottom) {
-                    layout.leftMargin = dp(16) + edges.left
-                    layout.topMargin = dp(16) + edges.top
-                    layout.rightMargin = dp(16) + edges.right
-                    layout.bottomMargin = dp(16) + edges.bottom
+                val bottom = dp(CANCEL_PILL_BOTTOM_DP) + edges.bottom
+                if (layout.bottomMargin != bottom) {
+                    layout.bottomMargin = bottom
                     cancel.layoutParams = layout
                 }
                 insets
@@ -702,7 +774,7 @@ class MainActivity : Activity() {
         connectionWaitingView = compact
         connectionCancelButton = cancel
         attachConnectionWaitingView()
-        applyStatusBarIconContrast(window, preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background)))
+        applyStatusBarIconContrast(window, preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background)))
     }
 
     /** A replacement document cannot inherit the outgoing document's visible-commit confirmation. */
@@ -713,7 +785,7 @@ class MainActivity : Activity() {
         connectionWaitingView = connectionFullWaitingView
         connectionCancelButton = connectionFullCancelButton
         attachConnectionWaitingView()
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
     }
 
     private fun setPageContent(root: View) {
@@ -732,9 +804,10 @@ class MainActivity : Activity() {
         connectionCancelButton = null
         connectionFullWaitingView = null
         connectionFullCancelButton = null
+        connectionLoaderSpinner = null
         connectionPageVisible = false
-        applyStatusBarIconContrast(window, if (webView == null) getColor(R.color.app_background)
-            else preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background)))
+        applyStatusBarIconContrast(window, if (webView == null) themeColor(R.color.app_background)
+            else preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background)))
     }
 
     private fun finishConnectionAttempt(attempt: ConnectionAttemptController.Attempt? = pendingConnection) {
@@ -850,35 +923,98 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        heading.addView(textView(R.string.paired_devices_title, 30f, Typeface.BOLD), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        heading.addView(textView(R.string.paired_devices_title, DshNativeType.DISPLAY, Typeface.BOLD).apply {
+            letterSpacing = -0.01f
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         heading.addView(toolbarIconButton(R.drawable.ic_settings, R.string.device_list_settings).apply {
             setOnClickListener { showDeviceListSettings() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         card.addView(heading)
         card.addView(spacer(8))
-        deviceListStatus = textView(R.string.paired_devices_description, 16f, Typeface.NORMAL, R.color.app_secondary).apply {
+        deviceListStatus = textView(R.string.paired_devices_description, DshNativeType.BODY, Typeface.NORMAL, R.color.app_secondary).apply {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         card.addView(deviceListStatus)
-        card.addView(spacer(18))
+        card.addView(spacer(24))
         val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val devices = pairedDeviceStore.load()
-        devices.forEachIndexed { index, device ->
-            if (index > 0) rows.addView(spacer(10))
-            rows.addView(deviceRow(device))
+        if (devices.isEmpty()) {
+            rows.addView(emptyDevicesState())
+        } else {
+            devices.forEachIndexed { index, device ->
+                if (index > 0) rows.addView(spacer(8))
+                rows.addView(deviceRow(device))
+            }
         }
         card.addView(rows)
-        card.addView(spacer(18))
+        card.addView(spacer(24))
         card.addView(primaryButton(R.string.add_computer, 52) { showConnectionChoices() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        refreshDeviceStatuses(devices)
+        if (devices.isNotEmpty()) refreshDeviceStatuses(devices)
+    }
+
+    /**
+     * Empty list: the DSH mark, one sentence describing what pairing buys, then the two
+     * ways to pair. It replaces a page whose only content was a lone "Add computer" button.
+     */
+    private fun emptyDevicesState(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(dp(16), dp(24), dp(16), dp(8))
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_dsh_mark)
+            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_foreground))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        addView(spacer(20))
+        addView(TextView(this@MainActivity).apply {
+            text = getString(R.string.empty_devices_title)
+            gravity = Gravity.CENTER
+            applyDshType(DshNativeType.CARD_TITLE, Typeface.BOLD, themeColor(R.color.app_foreground), DshNativeType.LINE_TITLE)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(spacer(8))
+        addView(TextView(this@MainActivity).apply {
+            text = getString(R.string.empty_devices_description)
+            gravity = Gravity.CENTER
+            applyDshType(DshNativeType.BODY, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_BODY)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(spacer(8))
+        addView(TextView(this@MainActivity).apply {
+            text = getString(R.string.empty_devices_lan_hint)
+            gravity = Gravity.CENTER
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_CAPTION)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(spacer(32))
+        addView(primaryButton(R.string.scan_action, 52) { openScanner() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(spacer(12))
+        addView(secondaryButton(R.string.empty_devices_manual_hint, 48) { showManualAddressEntry() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        DshNativeMotion.fadeIn(this, this@MainActivity)
+    }
+
+    /** Manual entry from the empty state: the address field of the LAN setup, asked for in a sheet. */
+    private fun showManualAddressEntry() {
+        accessMode = AccessMode.LAN
+        showSetup()
+        setupAddressField?.apply {
+            requestFocus()
+            (getContext().getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     private fun deviceRow(device: PairedDeviceRecord): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(12), dp(8), dp(12))
-            background = roundedRipple(getColor(R.color.app_surface), 16)
+            setPadding(dp(16), dp(16), dp(4), dp(16))
+            minimumHeight = dp(80)
+            background = DshNativeShapes.pressable(
+                this@MainActivity,
+                themeColor(R.color.app_surface),
+                DshNativeDimens.CARD_RADIUS,
+                themeColor(R.color.app_surface_tinted),
+                themeColor(R.color.app_border),
+            )
             isClickable = true
             isFocusable = true
             contentDescription = getString(R.string.open_paired_device, device.displayName)
@@ -886,39 +1022,44 @@ class MainActivity : Activity() {
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val title = TextView(this).apply {
             text = device.displayName
-            textSize = 17f
-            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
-            setTextColor(getColor(R.color.app_foreground))
+            applyDshType(DshNativeType.SECTION, Typeface.BOLD, themeColor(R.color.app_foreground), DshNativeType.LINE_TITLE)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
         val address = TextView(this).apply {
-            text = getString(R.string.paired_device_address, device.modeLabel(), device.origin.serialized)
-            textSize = 12f
-            setTextColor(getColor(R.color.app_secondary))
+            text = device.origin.serialized
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary))
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         val status = TextView(this).apply {
-            textSize = 12f
-            setTextColor(getColor(R.color.app_secondary))
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary))
             deviceStatusViews[device.key] = this
             setDeviceStatusText(this, device)
         }
         details.addView(title)
-        details.addView(spacer(3))
+        details.addView(spacer(4))
         details.addView(address)
+        details.addView(spacer(6))
         details.addView(status)
+        // Leading platform tile: the LAN/remote glyph in a tinted circle, so the trailing edge
+        // keeps a single action instead of three competing marks.
+        row.addView(FrameLayout(this).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_surface_tinted), 999)
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(if (device.mode == AccessMode.REMOTE) R.drawable.ic_cloud else R.drawable.ic_desktop)
+                imageTintList = ColorStateList.valueOf(themeColor(R.color.app_foreground))
+                contentDescription = null
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(16) })
         row.addView(details, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         updateDeviceRowAccessibility(row, device, status.text)
         row.addView(toolbarIconButton(R.drawable.ic_more_vertical, R.string.device_actions).apply {
             setOnClickListener { showDeviceActions(device) }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        row.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_chevron_right)
-            contentDescription = null
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(dp(32), dp(48)))
         row.setOnClickListener { connectPairedDevice(device) }
         row.setOnLongClickListener {
             row.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
@@ -950,19 +1091,10 @@ class MainActivity : Activity() {
         } else {
             status
         }
-        val color = getColor(if (device.status == PairedDeviceStatus.REACHABLE || current) R.color.app_success else R.color.app_secondary)
+        val color = themeColor(if (device.status == PairedDeviceStatus.REACHABLE || current) R.color.app_success else R.color.app_secondary)
         view.setTextColor(color)
-        view.setCompoundDrawablesWithIntrinsicBounds(
-            GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(color)
-                setSize(dp(8), dp(8))
-            },
-            null,
-            null,
-            null,
-        )
-        view.compoundDrawablePadding = dp(6)
+        view.setCompoundDrawablesWithIntrinsicBounds(DshNativeShapes.dot(this, color, 8), null, null, null)
+        view.compoundDrawablePadding = dp(8)
         updateDeviceRowAccessibility(view.parent?.parent as? View, device, view.text)
     }
 
@@ -991,9 +1123,10 @@ class MainActivity : Activity() {
     private fun refreshDeviceStatuses(devices: List<PairedDeviceRecord>) {
         deviceListRefreshRunnable?.let(deviceStatusHandler::removeCallbacks)
         deviceStatusPoller.refresh(devices)
+        val interval = ConnectionBackoff.deviceProbeTickMs(devices, System.currentTimeMillis())
         deviceListRefreshRunnable = Runnable {
             if (!isFinishing && !isDestroyed && deviceListVisible && showingSetup && pairedDeviceStore.load().isNotEmpty()) refreshDeviceStatuses(pairedDeviceStore.load())
-        }.also { deviceStatusHandler.postDelayed(it, DEVICE_STATUS_REFRESH_MS) }
+        }.also { deviceStatusHandler.postDelayed(it, interval) }
     }
 
     private fun applyDeviceStatusResult(device: PairedDeviceRecord, result: Result<NativeProbe>) {
@@ -1051,11 +1184,17 @@ class MainActivity : Activity() {
                 showDeviceList()
             })
         }
-        actions.add(getString(R.string.device_action_delete) to { confirmDeleteDevice(device) })
-        AlertDialog.Builder(this)
-            .setTitle(device.displayName)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .setNegativeButton(R.string.cancel, null)
+        val deleteLabel = getString(R.string.device_action_delete)
+        actions.add(deleteLabel to { confirmDeleteDevice(device) })
+        DshActionSheet.Builder(this)
+            .title(device.displayName)
+            .message(getString(R.string.paired_device_address, device.modeLabel(), device.origin.serialized))
+            .apply {
+                actions.forEach { (label, run) ->
+                    row(label, destructive = label == deleteLabel) { run() }
+                }
+            }
+            .alternate(getString(R.string.cancel)) { }
             .show()
     }
 
@@ -1066,41 +1205,49 @@ class MainActivity : Activity() {
     }
 
     private fun editDeviceName(device: PairedDeviceRecord) {
-        val input = EditText(this).apply {
-            setText(device.displayName)
-            setSelection(text.length)
-            hint = getString(R.string.device_name_hint)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            minHeight = dp(48)
-            setPadding(dp(12), 0, dp(12), 0)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.edit_device_name)
-            .setView(input)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.save) { _, _ ->
-                val name = java.text.Normalizer.normalize(input.text.toString(), java.text.Normalizer.Form.NFC).trim()
-                if (name.length !in 1..32 || Regex("[\\u0000-\\u001f\\u007f]").containsMatchIn(name)) {
+        lateinit var sheet: DshActionSheet
+        sheet = DshActionSheet.Builder(this)
+            .title(R.string.edit_device_name)
+            .input(
+                value = device.displayName,
+                hint = getString(R.string.device_name_hint),
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
+                onTextChanged = { typed -> sheet.setConfirmEnabled(isValidDeviceName(typed)) },
+            )
+            .confirm(R.string.save, enabled = isValidDeviceName(device.displayName)) {
+                val name = normalizeDeviceName(sheet.inputText().orEmpty())
+                if (!isValidDeviceName(name)) {
+                    sheet.dismissAfterAction = false
                     Toast.makeText(this, R.string.invalid_device_name, Toast.LENGTH_SHORT).show()
                 } else {
-                    if (withCredentialStorage { pairedDeviceStore.update(device.key) { it.copy(displayName = name) } } == null) return@setPositiveButton
+                    if (withCredentialStorage { pairedDeviceStore.update(device.key) { it.copy(displayName = name) } } == null) return@confirm
                     showDeviceList()
                 }
             }
-            .show()
+            .alternate(getString(R.string.cancel)) { }
+            .build()
+        sheet.show()
     }
 
+    /** Paired device names are 1-32 characters and carry no control characters. */
+    private fun isValidDeviceName(candidate: CharSequence): Boolean {
+        val name = java.text.Normalizer.normalize(candidate.toString(), java.text.Normalizer.Form.NFC).trim()
+        return name.length in 1..32 && !Regex("[\\u0000-\\u001f\\u007f]").containsMatchIn(name)
+    }
+
+    private fun normalizeDeviceName(candidate: CharSequence): String =
+        java.text.Normalizer.normalize(candidate.toString(), java.text.Normalizer.Form.NFC).trim()
+
     private fun confirmDeleteDevice(device: PairedDeviceRecord) {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.delete_device_title, device.displayName))
-            .setMessage(R.string.delete_device_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.delete) { _, _ ->
-                if (!prepareCredentialStorage()) return@setPositiveButton
+        DshActionSheet.Builder(this)
+            .title(getString(R.string.delete_device_title, device.displayName))
+            .message(R.string.delete_device_message)
+            .confirm(R.string.delete, destructive = true) {
+                if (!prepareCredentialStorage()) return@confirm
                 val legacyCredential = credentialStore(device.mode).load()
                     ?.takeIf { it.instanceId == device.instanceId }
                 val legacyOrigin = preferences.getString(originPreference(device.mode), null)
-                if (withCredentialStorage { pairedDeviceStore.remove(device.key) } != true) return@setPositiveButton
+                if (withCredentialStorage { pairedDeviceStore.remove(device.key) } != true) return@confirm
                 if (activeDeviceKey == device.key) {
                     activeDeviceKey = null
                     destroyWebView()
@@ -1125,16 +1272,18 @@ class MainActivity : Activity() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(8), dp(8))
-            background = roundedSurface(getColor(R.color.app_surface), 16).apply {
-                setStroke(dp(1), getColor(R.color.app_border))
-            }
+            setPadding(dp(20), dp(8), dp(8), dp(8))
+            background = DshNativeShapes.surface(
+                this@MainActivity,
+                themeColor(R.color.app_surface),
+                DshNativeDimens.CARD_RADIUS,
+                themeColor(R.color.app_border),
+            )
         }
         content.addView(
             TextView(this).apply {
                 text = getString(R.string.device_deleted, record.displayName)
-                textSize = 14f
-                setTextColor(getColor(R.color.app_foreground))
+                applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_foreground), DshNativeType.LINE_CAPTION)
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
@@ -1146,15 +1295,22 @@ class MainActivity : Activity() {
         ).apply {
             isOutsideTouchable = true
             elevation = dp(8).toFloat()
-            setBackgroundDrawable(roundedSurface(getColor(R.color.app_surface), 16))
+            setBackgroundDrawable(DshNativeShapes.surface(
+                this@MainActivity,
+                themeColor(R.color.app_surface),
+                DshNativeDimens.CARD_RADIUS,
+                null,
+            ))
+            animationStyle = android.R.style.Animation_Toast
         }
         content.addView(Button(this).apply {
             setText(R.string.undo)
             isAllCaps = false
             minHeight = dp(48)
-            setTextColor(getColor(R.color.app_accent))
+            setTextColor(themeColor(R.color.app_accent))
+            applyDshType(DshNativeType.CAPTION, Typeface.BOLD, themeColor(R.color.app_accent))
             backgroundTintList = null
-            background = roundedRipple(getColor(R.color.app_surface), 12)
+            background = roundedRipple(themeColor(R.color.app_surface), DshNativeDimens.SECONDARY_RADIUS)
             setOnClickListener {
                 if (withCredentialStorage { pairedDeviceStore.upsert(record) } == null) return@setOnClickListener
                 if (legacyCredential != null && withCredentialStorage {
@@ -1184,87 +1340,64 @@ class MainActivity : Activity() {
         deviceUndoPopup = null
     }
 
+    /** Launch behavior and same-computer switching are the App settings; the launcher icon is the fixed DSH mark. */
     private fun showDeviceListSettings() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.device_list_settings)
-            .setItems(arrayOf(getString(R.string.launch_settings), getString(R.string.icon_settings), getString(R.string.same_host_title))) { _, which ->
-                when (which) { 0 -> showLaunchSettings(); 1 -> showIconSettings(); else -> showSameHostSettings() }
+        DshActionSheet.Builder(this)
+            .title(R.string.device_list_settings)
+            .row(
+                getString(R.string.launch_settings),
+                getString(
+                    if (launchBehavior() == LaunchBehavior.DEVICE_LIST) R.string.launch_device_list else R.string.launch_direct_dsh,
+                ),
+            ) {
+                showLaunchSettings()
             }
-            .setNegativeButton(R.string.cancel, null)
+            .row(
+                getString(R.string.same_host_title),
+                getString(
+                    when (sameHostMode()) {
+                        SameHostSwitchMode.MANUAL -> R.string.same_host_manual
+                        SameHostSwitchMode.CONFIRM -> R.string.same_host_detect
+                        SameHostSwitchMode.AUTOMATIC -> R.string.same_host_enable
+                    },
+                ),
+            ) {
+                showSameHostSettings()
+            }
+            .alternate(getString(R.string.cancel)) { }
             .show()
     }
 
     private fun showLaunchSettings() {
-        val values = arrayOf(getString(R.string.launch_direct_dsh), getString(R.string.launch_device_list))
-        val selected = if (launchBehavior() == LaunchBehavior.DEVICE_LIST) 1 else 0
-        AlertDialog.Builder(this)
-            .setTitle(R.string.launch_settings)
-            .setSingleChoiceItems(values, selected) { dialog, which ->
-                preferences.edit().putString(PREFERENCE_LAUNCH_BEHAVIOR, if (which == 1) LaunchBehavior.DEVICE_LIST.name else LaunchBehavior.DIRECT_DSH.name).apply()
-                dialog.dismiss()
-                deviceListStatus?.setText(R.string.launch_setting_saved)
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    /** Flip the launcher icon between the DSH whale mascot and the official whale marks. */
-    private fun iconComponent(icon: LauncherIconPolicy.Icon): ComponentName = ComponentName(
-        packageName,
-        LauncherIconPolicy.aliasClassName(MainActivity::class.java.name.substringBeforeLast('.'), icon),
-    )
-
-    private fun currentAppIcon(): String = LauncherIconPolicy.selectedKey(
-        preferences.getString(PREFERENCE_APP_ICON, null),
-    ) { packageManager.getComponentEnabledSetting(iconComponent(it)) }
-
-    private fun applyAppIcon(icon: String) {
-        val pm = packageManager
-        try {
-            LauncherIconPolicy.switchIcon(
-                key = icon,
-                atomic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-                readState = { pm.getComponentEnabledSetting(iconComponent(it)) },
-            ) { changes ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    pm.setComponentEnabledSettings(changes.map {
-                        PackageManager.ComponentEnabledSetting(iconComponent(it.icon), it.state, PackageManager.DONT_KILL_APP)
-                    })
-                } else {
-                    changes.forEach {
-                        pm.setComponentEnabledSetting(iconComponent(it.icon), it.state, PackageManager.DONT_KILL_APP)
-                    }
-                }
-            }
-            preferences.edit().putString(PREFERENCE_APP_ICON, icon).apply()
-            deviceListStatus?.setText(R.string.icon_settings_saved)
-        } catch (error: Exception) {
-            // Package-manager failure is reported without persisting an unconfirmed selection.
-            Toast.makeText(this, R.string.icon_settings_failed, Toast.LENGTH_LONG).show()
+        val current = launchBehavior()
+        lateinit var sheet: DshActionSheet
+        fun choose(behavior: LaunchBehavior) {
+            preferences.edit().putString(PREFERENCE_LAUNCH_BEHAVIOR, behavior.name).apply()
+            deviceListStatus?.setText(R.string.launch_setting_saved)
+            sheet?.close()
         }
+        sheet = DshActionSheet.Builder(this)
+            .title(R.string.launch_settings)
+            .message(R.string.launch_settings_description)
+            .row(
+                getString(R.string.launch_direct_dsh),
+                getString(R.string.launch_direct_dsh_description),
+                selected = current == LaunchBehavior.DIRECT_DSH,
+            ) {
+                choose(LaunchBehavior.DIRECT_DSH)
+            }
+            .row(
+                getString(R.string.launch_device_list),
+                getString(R.string.launch_device_list_description),
+                selected = current == LaunchBehavior.DEVICE_LIST,
+            ) {
+                choose(LaunchBehavior.DEVICE_LIST)
+            }
+            .alternate(getString(R.string.cancel)) { }
+            .build()
+        sheet.show()
     }
 
-    private fun showIconSettings() {
-        val keys = LauncherIconPolicy.icons.map { it.key }
-        val labels = arrayOf(
-            getString(R.string.icon_choice_whale_girl),
-            getString(R.string.icon_choice_official_whale),
-            getString(R.string.icon_choice_official_whale_dark),
-            getString(R.string.icon_choice_official_whale_teal),
-            getString(R.string.icon_choice_official_whale_mono),
-            getString(R.string.icon_choice_official_whale_black),
-            getString(R.string.icon_choice_official_whale_white),
-        )
-        val selected = keys.indexOf(currentAppIcon()).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle(R.string.icon_settings)
-            .setSingleChoiceItems(labels, selected) { dialog, which ->
-                dialog.dismiss()
-                applyAppIcon(keys[which])
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
     private fun connectPairedDevice(snapshot: PairedDeviceRecord) {
         if (!prepareCredentialStorage()) return
         val device = pairedDeviceStore.load().firstOrNull { it.key == snapshot.key } ?: return
@@ -1309,15 +1442,14 @@ class MainActivity : Activity() {
         failureDialog?.dismiss()
 
         val card = createSetupCard(surface = false)
-        card.addView(textView(R.string.connection_center_title, 30f, Typeface.BOLD))
-        card.addView(spacer(8))
-        card.addView(textView(R.string.connection_center_description, 16f, Typeface.NORMAL, R.color.app_secondary))
+        card.addView(pageHeader(R.string.connection_center_title, R.string.connection_center_description, R.drawable.ic_link))
         val restoreStatus = textView(
             R.string.background_restore_running,
             14f,
             Typeface.NORMAL,
             R.color.app_secondary,
         ).apply {
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary))
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             setPadding(0, dp(12), 0, 0)
@@ -1351,27 +1483,33 @@ class MainActivity : Activity() {
     ): View =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(18))
-            background = roundedRipple(getColor(R.color.app_surface), 18)
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            background = DshNativeShapes.pressable(
+                this@MainActivity,
+                themeColor(R.color.app_surface),
+                DshNativeDimens.CARD_RADIUS,
+                themeColor(R.color.app_surface_tinted),
+                themeColor(R.color.app_border),
+            )
             isClickable = true
             isFocusable = true
             contentDescription = getString(titleResource)
-            addView(textView(titleResource, 18f, Typeface.BOLD))
+            addView(textView(titleResource, DshNativeType.SECTION, Typeface.BOLD))
             addView(spacer(6))
-            addView(textView(descriptionResource, 14f, Typeface.NORMAL, R.color.app_secondary))
+            addView(textView(descriptionResource, DshNativeType.BODY, Typeface.NORMAL, R.color.app_secondary))
             if (trusted) {
-                addView(spacer(10))
+                addView(spacer(14))
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     addView(
-                        textView(R.string.paired_device_ready, 13f, Typeface.BOLD, R.color.app_accent),
+                        textView(R.string.paired_device_ready, DshNativeType.CAPTION, Typeface.BOLD, R.color.app_success),
                         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
                     )
-                    addView(textView(R.string.reconfigure_connection, 13f, Typeface.BOLD, R.color.app_accent).apply {
+                    addView(textView(R.string.reconfigure_connection, DshNativeType.CAPTION, Typeface.BOLD, R.color.app_accent).apply {
                         isClickable = true
                         isFocusable = true
-                        setPadding(dp(12), dp(6), 0, dp(6))
+                        setPadding(dp(12), dp(12), 0, dp(12))
                         setOnClickListener { configure() }
                     })
                 })
@@ -1412,61 +1550,70 @@ class MainActivity : Activity() {
         failureDialog?.dismiss()
 
         val card = createSetupCard(surface = false)
-        card.addView(textView(R.string.discovery_title, 30f, Typeface.BOLD))
-        card.addView(spacer(10))
-        card.addView(textView(R.string.discovery_description, 16f, Typeface.NORMAL, R.color.app_secondary))
+        card.addView(pageHeader(
+            R.string.discovery_title,
+            R.string.discovery_description,
+            R.drawable.ic_scan_qr,
+        ))
         card.addView(spacer(28))
 
         val discovery = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedSurface(getColor(R.color.app_surface_translucent), 20).apply {
-                setStroke(dp(1), getColor(R.color.app_border))
-            }
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            background = DshNativeShapes.surface(
+                this@MainActivity,
+                themeColor(R.color.app_surface),
+                DshNativeDimens.CARD_RADIUS,
+                themeColor(R.color.app_border),
+            )
         }
 
         val status = TextView(this).apply {
             setText(R.string.scan_prompt)
-            setTextColor(getColor(R.color.app_secondary))
-            textSize = 15f
+            applyDshType(DshNativeType.BODY, Typeface.NORMAL, themeColor(R.color.app_secondary), DshNativeType.LINE_BODY)
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scanQr = primaryButton(R.string.scan_action, 56) { openScanner() }
-        val scan = primaryButton(R.string.scan_lan, 56) { scanForHarnesses(status, this, results) }
+        val scanQr = actionButton(R.string.scan_action, R.drawable.ic_scan_qr, primary = true, minHeightDp = 56) { _ -> openScanner() }
+        val scan = actionButton(R.string.scan_lan, R.drawable.ic_desktop, primary = false, minHeightDp = 52) { b ->
+            scanForHarnesses(status, b, results)
+        }
         val manual = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, 0)
         }
-        val manualField = field(
+        setupAddressField = field(
             R.string.gateway_hint,
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
             EditorInfo.IME_ACTION_GO,
             52,
             R.string.gateway_label,
         )
-        val manualAction = { connectManual(manualField.text.toString(), status) }
-        val manualConnect = secondaryButton(R.string.connect, 52) { manualAction() }.apply {
-            setPadding(dp(12), 0, dp(12), 0)
+        val addressField = setupAddressField!!
+        val manualAction = { connectManual(addressField.text.toString(), status) }
+        val manualConnect = primaryButton(R.string.connect, 52) { manualAction() }.apply {
+            setPadding(dp(18), 0, dp(18), 0)
         }
-        manualField.setOnEditorActionListener { _, actionId, _ ->
+        addressField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO) { manualAction(); true } else false
         }
-        manual.addView(manualField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        manual.addView(spacer(8))
-        manual.addView(manualConnect, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        manual.addView(addressField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        manual.addView(spacer(8).apply { layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)) })
+        manual.addView(manualConnect, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         discovery.addView(scanQr, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         discovery.addView(spacer(10))
         discovery.addView(scan, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        discovery.addView(spacer(18))
-        discovery.addView(status)
+        discovery.addView(spacer(20))
+        discovery.addView(sectionLabel(R.string.connection_section_title))
         discovery.addView(spacer(12))
+        discovery.addView(status)
+        discovery.addView(spacer(16))
         discovery.addView(manual)
         discovery.addView(spacer(12))
         discovery.addView(results, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         card.addView(discovery, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
-
     private fun showRemoteSetup() {
         cancelRestoreForConfiguration()
         stopDeviceListRefresh()
@@ -1481,26 +1628,26 @@ class MainActivity : Activity() {
         failureDialog?.dismiss()
 
         val card = createSetupCard(surface = false)
-        card.addView(textView(R.string.remote_setup_title, 30f, Typeface.BOLD))
-        card.addView(spacer(10))
-        card.addView(textView(R.string.remote_setup_description, 16f, Typeface.NORMAL, R.color.app_secondary))
+        card.addView(pageHeader(R.string.remote_setup_title, R.string.remote_setup_description, R.drawable.ic_cloud))
         card.addView(spacer(24))
         val remote = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedSurface(getColor(R.color.app_surface_translucent), 20).apply {
-                setStroke(dp(1), getColor(R.color.app_border))
-            }
+            background = DshNativeShapes.surface(
+                this@MainActivity,
+                themeColor(R.color.app_surface),
+                DshNativeDimens.CARD_RADIUS,
+                themeColor(R.color.app_border),
+            )
         }
-        remote.addView(textView(R.string.remote_step_one, 15f, Typeface.BOLD))
+        remote.addView(textView(R.string.remote_step_one, DshNativeType.SECTION, Typeface.BOLD))
         remote.addView(spacer(8))
-        remote.addView(textView(R.string.remote_step_two, 14f, Typeface.NORMAL, R.color.app_secondary))
-        remote.addView(spacer(18))
-        remote.addView(primaryButton(R.string.scan_remote_qr, 56) { openScanner() })
-        remote.addView(spacer(18))
+        remote.addView(textView(R.string.remote_step_two, DshNativeType.CAPTION, Typeface.NORMAL, R.color.app_secondary))
+        remote.addView(spacer(20))
+        remote.addView(actionButton(R.string.scan_remote_qr, R.drawable.ic_scan_qr, primary = true, minHeightDp = 56) { openScanner() })
+        remote.addView(spacer(20))
         val status = TextView(this).apply {
-            setTextColor(getColor(R.color.app_secondary))
-            textSize = 14f
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary))
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
@@ -1529,7 +1676,7 @@ class MainActivity : Activity() {
         val connection = GatewayConnection.parse(raw.trim())
         if (connection == null || !isRemoteTunnelHost(connection.origin.host)
             || GatewayUrlPolicy.pairingKey(raw.trim()) == null) {
-            status.setTextColor(getColor(R.color.app_error))
+            status.setTextColor(themeColor(R.color.app_error))
             status.setText(R.string.invalid_remote_link)
             status.visibility = View.VISIBLE
             return
@@ -1555,20 +1702,20 @@ class MainActivity : Activity() {
         showingSetup = false
         setupBackAction = null
         destroyWebView()
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        val loaderBackground = dshLoaderBackground()
+        applyStatusBarIconContrast(window, loaderBackground)
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(loaderBackground)
         }
-        addSetupArtwork(root)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(32), dp(32), dp(32), dp(32))
+        val content = dshLoaderColumn(getString(R.string.restoring_trust)).apply {
+            setPadding(dp(32), 0, dp(32), 0)
         }
-        content.addView(textView(R.string.restoring_trust, 16f, Typeface.NORMAL, R.color.app_secondary).apply {
-            gravity = Gravity.CENTER
-        })
-        root.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        DshNativeMotion.fadeIn(content, this)
+        root.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER,
+        ))
         setPageContent(root)
         applySafeAreaInsets(root)
     }
@@ -1581,20 +1728,34 @@ class MainActivity : Activity() {
         showingSetup = true
         setupBackAction = if (accessMode == AccessMode.LAN) ::showSetup else ::showRemoteSetup
         val card = createSetupCard()
-        card.addView(textView(R.string.pairing_title, 30f, Typeface.BOLD))
-        card.addView(spacer(12))
-        card.addView(textView(R.string.pairing_description, 16f, Typeface.NORMAL, R.color.app_secondary))
+        card.addView(pageHeader(R.string.pairing_title, R.string.pairing_description, R.drawable.ic_keyboard))
         card.addView(spacer(24))
-        card.addView(textView(R.string.selected_harness, 14f, Typeface.BOLD))
-        card.addView(spacer(6))
-        card.addView(TextView(this).apply {
-            text = "${harness.deviceName}\n${harness.origin.serialized}"
-            textSize = 16f
-            setTextColor(getColor(R.color.app_foreground))
+        val harnessCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            background = DshNativeShapes.surface(
+                this@MainActivity,
+                themeColor(R.color.app_surface_tinted),
+                DshNativeDimens.CARD_RADIUS,
+                null,
+            )
+        }
+        harnessCard.addView(textView(R.string.selected_harness, DshNativeType.LABEL, Typeface.BOLD, R.color.app_secondary))
+        harnessCard.addView(spacer(8))
+        harnessCard.addView(TextView(this).apply {
+            text = harness.deviceName
+            applyDshType(DshNativeType.SECTION, Typeface.BOLD, themeColor(R.color.app_foreground))
             setTextIsSelectable(true)
         })
+        harnessCard.addView(spacer(4))
+        harnessCard.addView(TextView(this).apply {
+            text = harness.origin.serialized
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_secondary))
+            setTextIsSelectable(true)
+        })
+        card.addView(harnessCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         card.addView(spacer(24))
-        card.addView(textView(R.string.pairing_key_label, 14f, Typeface.BOLD))
+        card.addView(textView(R.string.pairing_key_label, DshNativeType.LABEL, Typeface.BOLD, R.color.app_secondary))
         card.addView(spacer(8))
         val pairing = field(
             R.string.pairing_key_hint,
@@ -1608,15 +1769,14 @@ class MainActivity : Activity() {
         card.addView(pairing, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         card.addView(spacer(20))
         val status = TextView(this).apply {
-            setTextColor(getColor(R.color.app_error))
-            textSize = 14f
+            applyDshType(DshNativeType.CAPTION, Typeface.NORMAL, themeColor(R.color.app_error))
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        val connect = primaryButton(R.string.connect, 52) { connect(harness, pairing, status, this) }
+        val connect: TextView = primaryButton(R.string.connect, 52) { b -> this@MainActivity.connect(harness, pairing, status, b); Unit }
         pairing.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
-                connect(harness, pairing, status, connect)
+                this@MainActivity.connect(harness, pairing, status, connect)
                 true
             } else {
                 false
@@ -1627,17 +1787,16 @@ class MainActivity : Activity() {
         card.addView(status)
         card.addView(spacer(12))
         card.addView(secondaryButton(R.string.back_to_scan, 48) {
-            if (accessMode == AccessMode.LAN) showSetup() else showRemoteSetup()
+            if (accessMode == AccessMode.LAN) this@MainActivity.showSetup() else this@MainActivity.showRemoteSetup()
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         if (autoConnect && prefilledInput.isNotEmpty()) connect(harness, pairing, status, connect)
     }
 
     private fun createSetupCard(surface: Boolean = true): LinearLayout {
-        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, themeColor(R.color.app_background))
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(themeColor(R.color.app_background))
         }
-        addSetupArtwork(root)
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
@@ -1655,9 +1814,12 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             if (surface) {
                 setPadding(dp(24), dp(24), dp(24), dp(24))
-                background = roundedSurface(getColor(R.color.app_surface), 20).apply {
-                    setStroke(dp(1), getColor(R.color.app_border))
-                }
+                background = DshNativeShapes.surface(
+                    this@MainActivity,
+                    themeColor(R.color.app_surface),
+                    DshNativeDimens.CARD_RADIUS,
+                    themeColor(R.color.app_border),
+                )
             }
         }
         val availableWidth = (resources.displayMetrics.widthPixels - dp(48)).coerceAtLeast(dp(280))
@@ -1683,26 +1845,11 @@ class MainActivity : Activity() {
         return card
     }
 
-    /** Pre-connection artwork: covers the whole screen (edges may crop), under a theme-aware scrim. */
-    private fun addSetupArtwork(root: FrameLayout) {
-        root.addView(
-            ImageView(this).apply {
-                setImageResource(R.drawable.setup_background_image)
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-        root.addView(
-            View(this).apply { setBackgroundColor(getColor(R.color.app_setup_scrim)) },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-    }
-
     /** Reconnect to a manually entered origin, falling back to pairing when unknown. */
     private fun connectManual(raw: String, status: TextView) {
         val origin = parseManualOrigin(raw)
         if (origin == null) {
-            status.setTextColor(getColor(R.color.app_error))
+            status.setTextColor(themeColor(R.color.app_error))
             status.setText(R.string.invalid_gateway)
             status.visibility = View.VISIBLE
             return
@@ -1730,7 +1877,7 @@ class MainActivity : Activity() {
     private fun manualHarness(origin: GatewayOrigin): DiscoveredHarness =
         DiscoveredHarness(deviceName = "DeepSeek Harness", origin = origin, instanceId = "")
 
-    private fun connect(harness: DiscoveredHarness, pairing: EditText, status: TextView, button: Button) {
+    private fun connect(harness: DiscoveredHarness, pairing: EditText, status: TextView, button: View) {
         if (pairingAttemptGate.busy) return
         if (!prepareCredentialStorage()) {
             status.setText(R.string.device_storage_unavailable)
@@ -1764,14 +1911,14 @@ class MainActivity : Activity() {
         warnIfTailscale(origin)
         val generation = beginPairingAttempt() ?: return
         button.isEnabled = false
-        status.setTextColor(getColor(R.color.app_secondary))
+        status.setTextColor(themeColor(R.color.app_secondary))
         status.setText(R.string.pairing_in_progress)
         status.visibility = View.VISIBLE
         val mode = accessMode
         val store = credentialStore(mode)
         val attempt = startConnectionAttempt(mode, getString(R.string.pairing_in_progress), onCancelled = { reason ->
             button.isEnabled = true
-            status.setTextColor(getColor(R.color.app_secondary))
+            status.setTextColor(themeColor(R.color.app_secondary))
             status.setText(if (reason == ConnectionAttemptController.Reason.TIMED_OUT) R.string.connection_timed_out else R.string.connection_cancelled)
         })
         ioExecutor.execute {
@@ -1808,7 +1955,7 @@ class MainActivity : Activity() {
             if (trustFailure != null) {
                 runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(pairingFailureMessage(trustFailure, origin))
                     completePairingAttempt(generation)
                     button.isEnabled = true
@@ -1819,7 +1966,7 @@ class MainActivity : Activity() {
             if (trust == null) {
                 runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(R.string.pairing_tls_failed)
                     completePairingAttempt(generation)
                     button.isEnabled = true
@@ -1856,7 +2003,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (generation != pairingGeneration) return@runOnUiThread
                         if (renewed.instanceId != existingCredential.instanceId) {
-                            status.setTextColor(getColor(R.color.app_error))
+                            status.setTextColor(themeColor(R.color.app_error))
                             status.setText(R.string.pairing_failed)
                             completePairingAttempt(generation)
                             button.isEnabled = true
@@ -1888,7 +2035,7 @@ class MainActivity : Activity() {
                 if (!ConnectionRestorePolicy.mayPairAfterRenewFailure(renewalFailure)) {
                     runOnUiThread {
                         if (generation != pairingGeneration) return@runOnUiThread
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(pairingFailureMessage(renewalFailure, origin))
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1900,7 +2047,7 @@ class MainActivity : Activity() {
                 } catch (_: CredentialStorageUnavailable) {
                     runOnUiThread {
                         if (generation != pairingGeneration) return@runOnUiThread
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(R.string.device_storage_unavailable)
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1916,7 +2063,7 @@ class MainActivity : Activity() {
                     val expiresAt = session.deviceExpiresAt
                     if (deviceToken == null || expiresAt == null
                         || (expectedInstanceId != null && session.instanceId != expectedInstanceId)) {
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(R.string.pairing_failed)
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1926,7 +2073,7 @@ class MainActivity : Activity() {
                                 store.save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
                             }
                         }.isSuccess) {
-                        status.setTextColor(getColor(R.color.app_error))
+                        status.setTextColor(themeColor(R.color.app_error))
                         status.setText(R.string.device_storage_unavailable)
                         completePairingAttempt(generation)
                         button.isEnabled = true
@@ -1966,7 +2113,7 @@ class MainActivity : Activity() {
                 } }
                 .onFailure { error -> runOnUiThread {
                     if (generation != pairingGeneration) return@runOnUiThread
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(pairingFailureMessage(error, origin))
                     completePairingAttempt(generation)
                     button.isEnabled = true
@@ -1974,9 +2121,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showCompatibilityIssue(issue: CompatibilityIssue, status: TextView, button: Button) {
+    private fun showCompatibilityIssue(issue: CompatibilityIssue, status: TextView, button: View) {
         button.isEnabled = true
-        status.setTextColor(getColor(R.color.app_error))
+        status.setTextColor(themeColor(R.color.app_error))
         val required = issue.requiredVersion.orEmpty()
         val (title, message) = when (issue.kind) {
             CompatibilityIssueKind.APP_TOO_OLD -> R.string.app_update_required_title to getString(R.string.app_update_required_message, required)
@@ -1985,14 +2132,14 @@ class MainActivity : Activity() {
         }
         status.text = message
         status.visibility = View.VISIBLE
-        val dialog = AlertDialog.Builder(this).setTitle(title).setMessage(message)
+        val sheet = DshActionSheet.Builder(this).title(title).message(message)
         if (issue.kind == CompatibilityIssueKind.APP_TOO_OLD) {
-            dialog.setPositiveButton(R.string.download_update) { _, _ -> openExternal(Uri.parse(APP_RELEASES_URL)) }
-                .setNegativeButton(R.string.cancel, null)
+            sheet.confirm(R.string.download_update) { openExternal(Uri.parse(APP_RELEASES_URL)) }
+                .alternate(getString(R.string.cancel)) { }
         } else {
-            dialog.setPositiveButton(android.R.string.ok, null)
+            sheet.confirm(android.R.string.ok) { }
         }
-        dialog.show()
+        sheet.show()
     }
 
     private fun pairingFailureMessage(error: Throwable, origin: GatewayOrigin): Int = when ((error as? NativeAuthFailure)?.kind) {
@@ -2010,7 +2157,7 @@ class MainActivity : Activity() {
 
     private var scanCanceled = AtomicBoolean(false)
 
-    private fun scanForHarnesses(status: TextView, button: Button, results: LinearLayout) {
+    private fun scanForHarnesses(status: TextView, button: View, results: LinearLayout) {
         val nearbyGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
             || checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
         if (nearbyGranted && nearbyPermissionLimited) {
@@ -2026,24 +2173,29 @@ class MainActivity : Activity() {
         val scanCancellation = AtomicBoolean(false)
         scanCanceled = scanCancellation
         results.removeAllViews()
-        status.setTextColor(getColor(R.color.app_secondary))
+        status.setTextColor(themeColor(R.color.app_secondary))
         status.setText(if (nearbyPermissionLimited) R.string.scanning_lan_limited else R.string.scanning_lan)
         status.visibility = View.VISIBLE
         val attempt = startConnectionAttempt(AccessMode.LAN, status.text, onCancelled = { reason ->
             button.isEnabled = true
             results.removeAllViews()
-            status.setTextColor(getColor(R.color.app_secondary))
+            status.setTextColor(themeColor(R.color.app_secondary))
             status.setText(if (reason == ConnectionAttemptController.Reason.TIMED_OUT) R.string.connection_timed_out else R.string.scan_prompt)
         })
 
         val cancelButton = Button(this).apply {
             setText(R.string.cancel)
             isAllCaps = false
-            textSize = 15f
+            applyDshType(DshNativeType.BODY, Typeface.BOLD, themeColor(R.color.app_foreground))
             minHeight = dp(48)
             backgroundTintList = null
-            background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
-            setTextColor(getColor(R.color.app_foreground))
+            background = DshNativeShapes.pressable(
+                this@MainActivity,
+                themeColor(R.color.app_surface_tinted),
+                DshNativeDimens.SECONDARY_RADIUS,
+                themeColor(R.color.app_border),
+                null,
+            )
         }
         cancelButton.setOnClickListener {
             connectionAttempts.cancel(attempt)
@@ -2060,13 +2212,13 @@ class MainActivity : Activity() {
                 cancelButton.isEnabled = true
                 cancelButton.visibility = View.GONE
                 if (scanCancellation.get()) {
-                    status.setTextColor(getColor(R.color.app_secondary))
+                    status.setTextColor(themeColor(R.color.app_secondary))
                     status.setText(R.string.scan_prompt)
                 } else if (found.isEmpty()) {
-                    status.setTextColor(getColor(R.color.app_error))
+                    status.setTextColor(themeColor(R.color.app_error))
                     status.setText(R.string.no_harness_found)
                 } else {
-                    status.setTextColor(getColor(R.color.app_secondary))
+                    status.setTextColor(themeColor(R.color.app_secondary))
                     status.text = resources.getQuantityString(R.plurals.harnesses_found, found.size, found.size)
                     found.forEachIndexed { index, harness ->
                         if (index > 0) results.addView(spacer(8))
@@ -2081,11 +2233,17 @@ class MainActivity : Activity() {
                             text = getString(R.string.harness_list_item, harness.deviceName, harness.origin.serialized)
                             isAllCaps = false
                             gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                            minHeight = dp(68)
-                            textSize = 15f
-                            setTextColor(getColor(R.color.app_foreground))
+                            minHeight = dp(72)
+                            applyDshType(DshNativeType.BODY, Typeface.NORMAL, themeColor(R.color.app_foreground), DshNativeType.LINE_BODY)
+                            setPadding(dp(16), dp(12), dp(16), dp(12))
                             backgroundTintList = null
-                            background = roundedRipple(getColor(R.color.app_surface_tinted), 16)
+                            background = DshNativeShapes.pressable(
+                                this@MainActivity,
+                                themeColor(R.color.app_surface_tinted),
+                                DshNativeDimens.SECONDARY_RADIUS,
+                                themeColor(R.color.app_surface),
+                                themeColor(R.color.app_border),
+                            )
                             contentDescription = getString(
                                 if (trusted) R.string.open_harness_trusted else R.string.open_harness_pairing,
                                 harness.deviceName,
@@ -2242,34 +2400,36 @@ class MainActivity : Activity() {
     }
 
     private fun showPairedDeviceNamePrompt(record: PairedDeviceRecord, complete: () -> Unit) {
-        val input = EditText(this).apply {
-            setText(record.displayName)
-            setSelection(text.length)
-            hint = getString(R.string.device_name_hint)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            minHeight = dp(48)
+        lateinit var prompt: DshActionSheet
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finish() {
+            if (finished.compareAndSet(false, true)) complete()
         }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.name_new_device)
-            .setMessage(R.string.name_new_device_message)
-            .setView(input)
-            .setNegativeButton(R.string.skip) { _, _ -> complete() }
-            .setPositiveButton(R.string.save_and_connect, null)
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val name = java.text.Normalizer.normalize(input.text.toString(), java.text.Normalizer.Form.NFC).trim()
-                if (name.length !in 1..32 || Regex("[\\u0000-\\u001f\\u007f]").containsMatchIn(name)) {
+        prompt = DshActionSheet.Builder(this)
+            .title(R.string.name_new_device)
+            .message(R.string.name_new_device_message)
+            .input(
+                value = record.displayName,
+                hint = getString(R.string.device_name_hint),
+                onTextChanged = { typed -> prompt.setConfirmEnabled(isValidDeviceName(typed)) },
+            )
+            .confirm(R.string.save_and_connect, enabled = isValidDeviceName(record.displayName)) {
+                val name = normalizeDeviceName(prompt.inputText().orEmpty())
+                if (!isValidDeviceName(name)) {
+                    prompt.dismissAfterAction = false
                     Toast.makeText(this, R.string.invalid_device_name, Toast.LENGTH_SHORT).show()
                 } else {
-                    if (withCredentialStorage { pairedDeviceStore.update(record.key) { it.copy(displayName = name) } } == null) return@setOnClickListener
-                    dialog.dismiss()
-                    complete()
+                    if (withCredentialStorage { pairedDeviceStore.update(record.key) { it.copy(displayName = name) } } == null) return@confirm
+                    prompt.close()
+                    finish()
                 }
             }
-        }
-        dialog.setOnCancelListener { complete() }
-        dialog.show()
+            .alternate(getString(R.string.skip)) {
+                finish()
+            }
+            .onDismiss { finish() }
+            .build()
+        prompt.show()
     }
 
     private fun handleDeviceRevoked() {
@@ -2293,7 +2453,7 @@ class MainActivity : Activity() {
         webView?.setOnTouchListener(null)
     }
     private var draftTransfer: PlainTextDraftTransfer? = null
-    private var sameHostConfirmation: AlertDialog? = null
+    private var sameHostConfirmation: DshActionSheet? = null
     private var sameHostRestoreAttempt: ConnectionAttemptController.Attempt? = null
     private var sameHostProbeCancellation: NativeConnectionCancellation? = null
     private var sameHostObservedWifi: Boolean? = null
@@ -2302,25 +2462,44 @@ class MainActivity : Activity() {
     private fun automaticSameHost() = sameHostMode() != SameHostSwitchMode.MANUAL
 
     private fun showSameHostSettings() {
-        val choices = arrayOf(getString(R.string.same_host_manual), getString(R.string.same_host_detect), getString(R.string.same_host_enable))
-        AlertDialog.Builder(this).setTitle(R.string.same_host_title)
-            .setSingleChoiceItems(choices, sameHostMode().ordinal) { dialog, which ->
-                fun save() {
-                    preferences.edit().putString("same_host_mode", SameHostSwitchMode.entries[which].name).apply()
-                    sameHostGate.invalidate()
-                    sameHostProbeCancellation?.cancel()
-                    sameHostProbeCancellation = null
-                    sameHostConfirmation?.dismiss()
-                    checkSameHostConnection()
+        val current = sameHostMode()
+        val choices = arrayOf(
+            Triple(SameHostSwitchMode.MANUAL, R.string.same_host_manual, R.string.same_host_manual_description),
+            Triple(SameHostSwitchMode.CONFIRM, R.string.same_host_detect, R.string.same_host_detect_description),
+            Triple(SameHostSwitchMode.AUTOMATIC, R.string.same_host_enable, R.string.same_host_enable_description),
+        )
+        fun save(mode: SameHostSwitchMode) {
+            preferences.edit().putString("same_host_mode", mode.name).apply()
+            sameHostGate.invalidate()
+            sameHostProbeCancellation?.cancel()
+            sameHostProbeCancellation = null
+            sameHostConfirmation?.dismiss()
+            checkSameHostConnection()
+        }
+        lateinit var sheet: DshActionSheet
+        val builder = DshActionSheet.Builder(this).title(R.string.same_host_title)
+        choices.forEach { (mode, label, description) ->
+            builder.row(getString(label), getString(description), selected = current == mode) {
+                sheet?.close()
+                if (mode == SameHostSwitchMode.AUTOMATIC) {
+                    sameHostConfirmation = DshActionSheet.Builder(this)
+                        .title(R.string.same_host_enable)
+                        .message(R.string.same_host_limits)
+                        .confirm(R.string.same_host_enable) { save(mode) }
+                        .alternate(getString(R.string.cancel)) { }
+                        .build()
+                        .also { confirmation ->
+                            sameHostConfirmation = confirmation
+                            confirmation.setOnDismissListener { sameHostConfirmation = null }
+                            confirmation.show()
+                        }
+                } else {
+                    save(mode)
                 }
-                dialog.dismiss()
-                if (which == SameHostSwitchMode.AUTOMATIC.ordinal) {
-                    AlertDialog.Builder(this).setTitle(R.string.same_host_enable).setMessage(R.string.same_host_limits)
-                        .setNegativeButton(R.string.cancel, null)
-                        .setPositiveButton(R.string.same_host_enable) { _, _ -> save() }.show()
-                } else save()
             }
-            .setNegativeButton(R.string.cancel, null).show()
+        }
+        sheet = builder.alternate(getString(R.string.cancel)) { }.build()
+        sheet.show()
     }
 
     /** Only authenticated probes can trigger recovery or offer a voluntary LAN return. */
@@ -2447,13 +2626,18 @@ class MainActivity : Activity() {
         fun confirm() {
             if (!sameHostGate.foreground || lifecycleOwner != sameHostGate.generation || generation != restoreGeneration || webView !== browser || showingSetup || isFinishing || isDestroyed) return
             finishConnectionAttempt()
-            sameHostConfirmation = AlertDialog.Builder(this).setTitle(R.string.same_host_switch_title)
-                .setMessage(R.string.same_host_switch_warning)
-                .setNegativeButton(R.string.cancel) { _, _ -> finishConnectionAttempt() }
-                .setPositiveButton(R.string.same_host_switch_confirm) { _, _ -> connect() }
-                .create().also { dialog ->
-                    dialog.setOnDismissListener { sameHostConfirmation = null }
-                    dialog.show()
+            sameHostConfirmation = DshActionSheet.Builder(this)
+                .title(R.string.same_host_switch_title)
+                .message(R.string.same_host_switch_warning)
+                .confirm(R.string.same_host_switch_confirm) { connect() }
+                .alternate(getString(R.string.cancel)) { finishConnectionAttempt() }
+                .build()
+                .also { sheet ->
+                    // Only cancel, back or a scrim tap ends the attempt; confirming connects.
+                    sheet.setOnCancelListener { finishConnectionAttempt() }
+                    sheet.setOnDismissListener { sameHostConfirmation = null }
+                    sameHostConfirmation = sheet
+                    sheet.show()
                 }
         }
         if (sameHostMode() == SameHostSwitchMode.AUTOMATIC && browser != null &&
@@ -2522,7 +2706,8 @@ class MainActivity : Activity() {
             openExternal = { failed = true; transfer.abort() }, onBlocked = { failed = true; transfer.abort() },
             onFailure = { failed = true; transfer.abort() }, onRendererGone = { failed = true; transfer.abort() },
             onTopLevelUrlChanged = { changed -> if (changed != url) { failed = true; transfer.abort() } },
-            onLoaded = {}, onBeforeTopLevelNavigation = {})
+            // A staged browser that commits a page also restarts the automatic recovery budget.
+            onLoaded = { cancelAutomaticRecovery() }, onBeforeTopLevelNavigation = {})
         target.webViewClient = client
         transfer.restore(source, target, snapshot, current = {
             val rows = pairedDeviceStore.load()
@@ -2640,9 +2825,9 @@ class MainActivity : Activity() {
 
     private fun scheduleAutomaticRecovery(): Boolean {
         if (recoveryScheduled || restoreAttemptGate.restorePending) return true
-        if (recoveryAttempt >= RECOVERY_DELAYS_MS.size || !canRecoverAutomatically()) return false
+        if (recoveryAttempt >= ConnectionBackoff.RECOVERY_DELAYS || !canRecoverAutomatically()) return false
         if (pendingConnection == null) startConnectionAttempt(accessMode, preserveBrowser = webView)
-        val delay = RECOVERY_DELAYS_MS[recoveryAttempt++]
+        val delay = ConnectionBackoff.recoveryDelay(recoveryAttempt++)
         recoveryHandler.postDelayed(restoreAttemptGate.retryCallback {
             if (!isFinishing && !isDestroyed) recoverAutomatically()
         }, delay)
@@ -2671,6 +2856,11 @@ class MainActivity : Activity() {
                 ExhaustedRecoveryAction.IGNORE -> Unit
                 ExhaustedRecoveryAction.KEEP_PAGE -> {
                     finishConnectionAttempt()
+                    // A retained page only keeps its budget while it still answers; a later failure
+                    // starts a fresh backoff window instead of inheriting an exhausted one.
+                    recoveryAttempt = 0
+                    restoreAttemptGate.cancelRetry()
+                    if (scheduleAutomaticRecovery()) return@probeMountedDshPage
                     showLoadFailure(LoadFailure.NETWORK)
                 }
                 ExhaustedRecoveryAction.SHOW_CONNECTIONS -> fallback()
@@ -3112,7 +3302,7 @@ class MainActivity : Activity() {
             showDeviceList()
             deviceListStatus?.apply {
                 setText(R.string.webview_renderer_failed)
-                setTextColor(getColor(R.color.app_error))
+                setTextColor(themeColor(R.color.app_error))
             }
             return
         }
@@ -3128,24 +3318,25 @@ class MainActivity : Activity() {
         if (engine.reminderKey in acknowledged) return
         preferences.edit().putStringSet("webview_update_reminder_engines", acknowledged + engine.reminderKey).apply()
         val providerLabel = listOfNotNull(engine.providerPackage, engine.providerVersion).joinToString(" ")
-        AlertDialog.Builder(this)
-            .setTitle(R.string.webview_update_title)
-            .setMessage(getString(R.string.webview_update_message, engine.chromiumVersion, providerLabel))
-            .setPositiveButton(R.string.webview_update_action) { _, _ ->
-                val providerPackage = engine.providerPackage
-                if (providerPackage == "com.google.android.webview" || providerPackage == "com.android.chrome") {
-                    openExternal(Uri.parse("https://play.google.com/store/apps/details?id=$providerPackage"))
-                } else if (providerPackage != null) {
-                    try {
-                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$providerPackage")))
-                    } catch (_: ActivityNotFoundException) {
-                        openExternal(Uri.parse("https://developer.android.com/develop/ui/views/layout/webapps/managing-webview"))
-                    }
-                } else {
+        fun openProvider() {
+            val providerPackage = engine.providerPackage
+            if (providerPackage == "com.google.android.webview" || providerPackage == "com.android.chrome") {
+                openExternal(Uri.parse("https://play.google.com/store/apps/details?id=$providerPackage"))
+            } else if (providerPackage != null) {
+                try {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$providerPackage")))
+                } catch (_: ActivityNotFoundException) {
                     openExternal(Uri.parse("https://developer.android.com/develop/ui/views/layout/webapps/managing-webview"))
                 }
+            } else {
+                openExternal(Uri.parse("https://developer.android.com/develop/ui/views/layout/webapps/managing-webview"))
             }
-            .setNegativeButton(R.string.webview_continue, null)
+        }
+        DshActionSheet.Builder(this)
+            .title(R.string.webview_update_title)
+            .message(getString(R.string.webview_update_message, engine.chromiumVersion, providerLabel))
+            .confirm(R.string.webview_update_action) { openProvider() }
+            .alternate(getString(R.string.webview_continue)) { }
             .show()
     }
 
@@ -3182,9 +3373,9 @@ class MainActivity : Activity() {
 
         // Every DSH page and third-party overlay shares the native safe viewport.
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundColor(themeColor(R.color.app_background))
         }
-        val initialChromeColor = preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background))
+        val initialChromeColor = preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, themeColor(R.color.app_background))
         root.setBackgroundColor(initialChromeColor)
         applyStatusBarIconContrast(window, initialChromeColor)
         val statusBarBackdrop = View(this).apply {
@@ -3199,7 +3390,7 @@ class MainActivity : Activity() {
         webView = browser
         loadingConnectionAttempt = pendingConnection
         recoveryStoppedBrowser = null
-        browser.setBackgroundColor(getColor(R.color.app_background))
+        browser.setBackgroundColor(themeColor(R.color.app_background))
         browser.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -3229,16 +3420,20 @@ class MainActivity : Activity() {
         }
         fun ownsBrowser(): Boolean = webView === browser && gatewayOrigin == origin && !isFinishing && !isDestroyed
         fun withdrawPageReadiness() {
+            // A replacement document only withdraws the readiness confirmation. Once the page
+            // has been revealed it stays on screen with the compact cancel control, so DSH's own
+            // loader flows straight into the app instead of flashing the native waiting page.
             loadingDocumentGeneration = null
             pageReadyCheck?.let(restoreUiHandler::removeCallbacks)
             pageReadyCheck = null
-            restoreConnectionWaitingScreen()
         }
         fun inspectVisibleContent(generation: Int) {
             val attempt = loadingConnectionAttempt ?: return
             if (!ownsBrowser() || !connectionAttempts.isCurrent(attempt)
                 || secureWebViewClient?.currentDocumentGeneration != generation) return
             loadingDocumentGeneration = generation
+            // Hand over to DSH's own boot loader as soon as it paints: a page kept covered by the
+            // native loader is throttled by the WebView and boots far slower.
             revealConnectionPage(browser, attempt, generation)
             finishConnectionWhenPageReady(browser, origin, attempt, generation)
         }
@@ -3298,6 +3493,9 @@ class MainActivity : Activity() {
                 if (ownsBrowser()) {
                     displayScale.onDocumentReady()
                     retryUrl = origin.serialized
+                    // A committed page proves the transport recovered: the next outage restarts the
+                    // backoff window at its first delay instead of using up an earlier budget.
+                    cancelAutomaticRecovery()
                     CookieManager.getInstance().flush()
                     nativeBridge?.injectPage()
                     secureWebViewClient?.currentDocumentGeneration?.let(::inspectVisibleContent)
@@ -3360,6 +3558,7 @@ class MainActivity : Activity() {
                 if (connectionWaitingView == null || connectionPageVisible) applyStatusBarIconContrast(window, color)
                 preferences.edit().putInt(PREFERENCE_WEB_CHROME_COLOR, color).apply()
             }
+            bridge.onPageTheme = { palette -> DshNativeTheme.store(preferences, palette) }
             bridge.onDeviceRevoked = ::handleDeviceRevoked
             bridge.onRenewSession = { requestId, isCurrent, done ->
                 renewSessionFromPage(requestId, browser, origin, isCurrent, done)
@@ -3619,11 +3818,11 @@ class MainActivity : Activity() {
     }
 
     private fun confirmClearSiteData() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.clear_site_data_title)
-            .setMessage(R.string.clear_site_data_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.clear) { _, _ -> clearSiteData() }
+        DshActionSheet.Builder(this)
+            .title(R.string.clear_site_data_title)
+            .message(R.string.clear_site_data_message)
+            .confirm(R.string.clear, destructive = true) { clearSiteData() }
+            .alternate(getString(R.string.cancel)) { }
             .show()
     }
 
@@ -3700,10 +3899,10 @@ class MainActivity : Activity() {
                 }
             }
         }
-        failureDialog = AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton(R.string.retry) { _, _ ->
+        failureDialog = DshActionSheet.Builder(this)
+            .title(title)
+            .message(message)
+            .confirm(R.string.retry) {
                 recoveryStoppedBrowser = null
                 if ((failure == LoadFailure.NETWORK || failure == LoadFailure.AUTH_EXPIRED || failure == LoadFailure.SERVICE_UNAVAILABLE)
                     && canRecoverAutomatically()
@@ -3719,10 +3918,10 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            .setNegativeButton(R.string.edit_connection) { _, _ ->
+            .alternate(getString(R.string.edit_connection)) {
                 if (cpolarAddressFailure) showRemoteSetup() else showConnectionCenter()
             }
-            .create()
+            .build()
             .also { dialog ->
                 dialog.setOnDismissListener { failureDialog = null }
                 dialog.show()
@@ -3767,13 +3966,13 @@ class MainActivity : Activity() {
         setText(textResource)
         textSize = sizeSp
         setTypeface(Typeface.DEFAULT, style)
-        setTextColor(getColor(colorResource))
+        setTextColor(themeColor(colorResource))
     }
 
     private fun toolbarIconButton(iconResource: Int, labelResource: Int): ImageButton = ImageButton(this).apply {
         setImageResource(iconResource)
         contentDescription = getString(labelResource)
-        setColorFilter(getColor(R.color.app_foreground))
+        setColorFilter(themeColor(R.color.app_foreground))
         scaleType = ImageView.ScaleType.CENTER
         setPadding(dp(8), dp(8), dp(8), dp(8))
         val selectable = TypedValue()
@@ -3782,30 +3981,102 @@ class MainActivity : Activity() {
     }
 
     /** Primary action button: accent fill, consistent tap target. */
-    private fun primaryButton(textResource: Int, minHeightDp: Int, onClick: Button.() -> Unit): Button = Button(this).apply {
-        setText(textResource)
-        isAllCaps = false
-        textSize = 17f
-        setTypeface(Typeface.DEFAULT, Typeface.BOLD)
-        minHeight = dp(minHeightDp)
-        backgroundTintList = null
-        background = roundedRipple(getColor(R.color.app_accent), 16)
-        setTextColor(getColor(R.color.app_on_accent))
-        setOnClickListener { onClick() }
+    /**
+     * The heading of a setup page: an icon plate, a display title and one supporting sentence.
+     * Keeping it in one helper keeps every page entry aligned with the same 8dp rhythm.
+     */
+    private fun pageHeader(titleResource: Int, descriptionResource: Int, iconResource: Int): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(iconPlate(iconResource))
+            addView(spacer(20))
+            addView(textView(titleResource, DshNativeType.DISPLAY, Typeface.BOLD).apply {
+                letterSpacing = -0.01f
+            })
+            addView(spacer(10))
+            addView(textView(descriptionResource, DshNativeType.BODY, Typeface.NORMAL, R.color.app_secondary))
+        }
+
+    /** An icon held in a soft square so the DSH mark and feature icons share one optical size. */
+    private fun iconPlate(iconResource: Int, sizeDp: Int = 48): FrameLayout {
+        val plate = FrameLayout(this)
+        plate.background = DshNativeShapes.surface(this, themeColor(R.color.app_surface_tinted), 16, themeColor(R.color.app_border))
+        plate.addView(ImageView(this).apply {
+            setImageResource(iconResource)
+            imageTintList = ColorStateList.valueOf(themeColor(R.color.app_foreground))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        plate.layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        return plate
     }
 
-    /** Secondary action button: tinted fill, quieter than the primary one. */
-    private fun secondaryButton(textResource: Int, minHeightDp: Int, onClick: Button.() -> Unit): Button = Button(this).apply {
-        setText(textResource)
-        isAllCaps = false
-        textSize = 15f
-        minHeight = dp(minHeightDp)
-        setTextColor(getColor(R.color.app_foreground))
-        backgroundTintList = null
-        background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
-        setOnClickListener { onClick() }
+    /** Small uppercase-style section label that separates groups inside a card. */
+    private fun sectionLabel(resource: Int): TextView = (textView(resource, DshNativeType.LABEL, Typeface.BOLD, R.color.app_secondary) as TextView).apply {
+        letterSpacing = 0.02f
     }
 
+    /** A primary or secondary action with an optional leading line icon. */
+    private fun actionButton(
+        resource: Int,
+        iconResource: Int,
+        primary: Boolean,
+        minHeightDp: Int,
+        onClick: (TextView) -> Unit,
+    ): TextView {
+        val button: TextView = if (primary) {
+            primaryButton(resource, minHeightDp) { onClick(it); Unit }
+        } else {
+            secondaryButton(resource, minHeightDp) { onClick(it); Unit }
+        }
+        val icon = resources.getDrawable(iconResource, theme).mutate().apply {
+            setTint(themeColor(if (primary) R.color.app_on_accent else R.color.app_foreground))
+        }
+        button.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null)
+        button.compoundDrawablePadding = dp(10)
+        button.gravity = if (primary) Gravity.CENTER else Gravity.START or Gravity.CENTER_VERTICAL
+        if (!primary) button.setPadding(dp(18), button.paddingTop, dp(18), button.paddingBottom)
+        return button
+    }
+    /** The single primary action of a page: accent fill, DSH radius, 17sp bold label. */
+    private fun primaryButton(textResource: Int, minHeightDp: Int, onClick: (TextView) -> Unit): TextView =
+        TextView(this).apply {
+            setText(textResource)
+            gravity = Gravity.CENTER
+            applyDshType(17f, Typeface.BOLD, themeColor(R.color.app_on_accent))
+            minHeight = dp(minHeightDp)
+            setPadding(dp(24), dp(14), dp(24), dp(14))
+            background = DshNativeShapes.pressable(
+                this@MainActivity,
+                themeColor(R.color.app_accent),
+                DshNativeDimens.PRIMARY_RADIUS,
+                themeColor(R.color.app_on_accent),
+                null,
+            )
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick(this) }
+        }
+
+    /** Secondary action: tinted fill and a quieter label, still at the 48dp target height. */
+    private fun secondaryButton(textResource: Int, minHeightDp: Int, onClick: (TextView) -> Unit): TextView =
+        TextView(this).apply {
+            setText(textResource)
+            gravity = Gravity.CENTER
+            applyDshType(DshNativeType.BODY, Typeface.BOLD, themeColor(R.color.app_foreground))
+            minHeight = dp(minHeightDp)
+            setPadding(dp(24), dp(14), dp(24), dp(14))
+            background = DshNativeShapes.pressable(
+                this@MainActivity,
+                themeColor(R.color.app_surface_tinted),
+                DshNativeDimens.SECONDARY_RADIUS,
+                themeColor(R.color.app_border),
+                null,
+            )
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick(this) }
+        }
     /** Filled text field: tinted rounded background with comfortable padding. */
     private fun field(
         hintResource: Int,
@@ -3819,12 +4090,11 @@ class MainActivity : Activity() {
         this.imeOptions = imeOptions
         isSingleLine = true
         minHeight = dp(minHeightDp)
-        textSize = 16f
+        applyDshType(16f, Typeface.NORMAL, themeColor(R.color.app_foreground))
         setPadding(dp(16), 0, dp(16), 0)
-        background = roundedSurface(getColor(R.color.app_surface_tinted), 12)
+        background = DshNativeShapes.surface(this@MainActivity, themeColor(R.color.app_surface_tinted), DshNativeDimens.SECONDARY_RADIUS, themeColor(R.color.app_border))
         this.contentDescription = getString(contentDescriptionResource)
     }
-
     private fun roundedSurface(color: Int, radiusDp: Int): GradientDrawable = GradientDrawable().apply {
         setColor(color)
         cornerRadius = dp(radiusDp).toFloat()
@@ -3833,7 +4103,7 @@ class MainActivity : Activity() {
     private fun roundedRipple(color: Int, radiusDp: Int): RippleDrawable {
         val content = roundedSurface(color, radiusDp)
         return RippleDrawable(
-            ColorStateList.valueOf(getColor(R.color.app_border)),
+            ColorStateList.valueOf(themeColor(R.color.app_border)),
             content,
             null,
         )
@@ -3877,6 +4147,7 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val CANCEL_PILL_BOTTOM_DP = 32
         const val PREFERENCES_NAME = "dsh_mobile"
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"
@@ -3888,7 +4159,6 @@ class MainActivity : Activity() {
         const val PREFERENCE_NEARBY_PERMISSION_LIMITED = "nearby_permission_limited"
         const val PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
         const val PREFERENCE_WEB_CHROME_COLOR = "web_chrome_color"
-        const val PREFERENCE_APP_ICON = "app_icon"
         const val STATE_SHOWING_SETUP = "showing_setup"
         const val STATE_ACCESS_MODE = "access_mode"
         const val STATE_NATIVE_BRIDGE = "native_bridge"
@@ -3905,7 +4175,6 @@ class MainActivity : Activity() {
         const val TASK_NOTIFICATION_PERMISSION_REQUEST = 4105
         const val SCAN_QR_REQUEST = 4106
         const val VOICE_PERMISSION_REQUEST = 4107
-        const val DEVICE_STATUS_REFRESH_MS = 20_000L
         const val DEVICE_UNDO_TIMEOUT_MS = 6_000L
         const val LIVE_DOCUMENT_PROBE_TIMEOUT_MS = 2_000L
         const val MOBILE_BACK_TIMEOUT_MS = 1_500L
@@ -3913,7 +4182,6 @@ class MainActivity : Activity() {
         const val LAN_CONNECTION_BUDGET_MS = 30_000L
         const val REMOTE_CONNECTION_BUDGET_MS = 60_000L
         const val APP_RELEASES_URL = "https://github.com/saya-ch/dsh-mobile/releases/latest"
-        val RECOVERY_DELAYS_MS = longArrayOf(0L, 1_000L, 3_000L, 8_000L)
         val MIME_TYPE = Regex("^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+*-]+$")
         val UNSAFE_FILENAME = Regex("[\\\\/:*?\"<>|\\p{Cc}]")
     }

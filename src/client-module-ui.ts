@@ -164,7 +164,7 @@ export const CLIENT_MODULE_STYLES = `
 .dsh-module-button:focus-visible{outline:2px solid var(--dsw-alias-label-primary-bluish,#2563eb);outline-offset:2px}
 .dsh-module-button:not(:disabled):active{background:var(--dsw-alias-interactive-bg-active)}
 .dsh-module-dialog{box-sizing:border-box;width:min(640px,calc(100vw - 24px));max-height:calc(100dvh - 32px);padding:0;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-panel,20px);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#171a21);font:16px/1.5 var(--dsw-font-family,sans-serif);overflow:hidden}
-.dsh-module-dialog[open]{display:flex;flex-direction:column}.dsh-module-dialog::backdrop{background:rgb(15 23 42 / 40%)}
+.dsh-module-dialog[open]{display:flex;flex-direction:column}.dsh-module-dialog::backdrop{background:var(--dsw-alias-bg-mask-1,rgb(0 0 0 / 24%))}
 .dsh-module-header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l2);flex:none}
 .dsh-module-header h2{flex:1;min-width:0;font-size:20px;line-height:1.4;margin:0;overflow-wrap:anywhere}.dsh-module-header .dsh-module-button{flex:none}
 .dsh-module-packageDescription{margin:2px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
